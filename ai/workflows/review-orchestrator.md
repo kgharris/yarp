@@ -1,8 +1,5 @@
 # Review Orchestrator
 
-> **STATUS: NEEDS REWORK.** This workflow is functional but has known issues
-> with agent lane-drift and clunky iteration mechanics. See notes at bottom.
-
 ## Purpose
 
 Orchestrates a multi-personality review cycle. Launches one agent per reviewer
@@ -63,9 +60,9 @@ Each reviewer writes: `reviews/<personality-file-stem>-<slug>-<iteration>.md`
 
 ## Findings
 
-| ID | Severity | Location | Issue | Recommendation |
-|---|---|---|---|---|
-| <ABBREV>-<SLUG>-<N> | CRITICAL/MAJOR/MINOR/QUESTION | <file:section> | What is wrong | What should change |
+| ID | Location | Issue | Recommendation |
+|---|---|---|---|
+| <a id="<ID>"></a><ID> | <file>:<heading path or line> | Problem description quoting artifact text | What should change |
 
 ## Passed Checks
 Brief list of areas reviewed and found correct.
@@ -74,26 +71,75 @@ Brief list of areas reviewed and found correct.
 Anything intentionally not covered.
 ```
 
-Severity levels:
-- **CRITICAL** — Wrong, inconsistent, or missing; will cause incorrect behavior or block implementation.
-- **MAJOR** — Significant gap or ambiguity; will cause implementation divergence.
-- **MINOR** — Small gap or wording issue; won't block implementation.
-- **QUESTION** — Requires a decision before it can be assessed.
+Sort the table by severity: CRT first, then MAJ, MIN, QST.
+
+Column definitions:
+
+- **ID** — `<ABBREV>-<SLUG>-<SEV>-<NN>`. Each ID cell includes an HTML
+  anchor (`<a id="..."></a>`) so the summary file can deep-link to it.
+  - ABBREV = personality's initials (PO, PE, UXE, EE, UXQA, EQA, FDR, DBE).
+  - SLUG = short kebab-case topic.
+  - SEV = severity code:
+    - CRT — Wrong, inconsistent, or missing; will cause incorrect behavior or block implementation.
+    - MAJ — Significant gap or ambiguity; will cause implementation divergence.
+    - MIN — Small gap or wording issue; won't block implementation.
+    - QST — Requires a decision before it can be assessed.
+  - NN = two-digit sequence number (01–99), scoped per severity level
+    (CRT-01, CRT-02, …; MAJ-01, MAJ-02, … each start at 01).
+- **Location** — File path and heading path or line number. Use the deepest
+  relevant heading to pinpoint the passage. Examples:
+  `requirements/engine/timeline.md: Forward Sweep > Boundary Conditions`,
+  `design/engine/projection.md:L42`.
+  When a finding spans multiple locations, use additional rows with ID blank:
+
+  | ID | Location | Issue | Recommendation |
+  |---|---|---|---|
+  | <a id="EE-example-CRT-01"></a>EE-example-CRT-01 | design/engine/projection.md:L42 | description quoting first location | specific edit for this location |
+  | | design/engine/streams.md: Stream Construction | quote from second location | specific edit for this location (or blank if identical to above) |
+- **Issue** — Describe the problem and quote the specific artifact text that
+  is wrong or missing. The quote grounds the finding to a concrete passage
+  and enables the [fix orchestrator](fix-orchestrator.md) to apply fixes
+  without re-analysis.
+- **Recommendation** — What should change. Be specific enough that a fix
+  can be drafted without re-reading the surrounding context.
 
 ## Summary File
 
 After all reviewers complete, produce `reviews/summary-<slug>-<iteration>.md`:
 
 - Finding-count table by severity and reviewer.
-- **Consolidated Findings** clustering related findings from different reviewers.
-  Each gets a meta-tag `META-<SLUG>-<N>` with constituent finding IDs.
-  Severity inherits the most severe constituent rating.
+- **Consolidated Findings** table clustering related findings from different
+  reviewers. Sort by severity (CRT first, then MAJ, MIN, QST):
+
+  | ID | Citation | Issue | Recommendation |
+  |---|---|---|---|
+  | META-<SLUG>-<SEV>-<NN> | <finding-ID> | Problem description | What should change |
+  | | <finding-ID> | … or blank if agrees with above | … or blank |
+
+  - **ID** — `META-<SLUG>-<SEV>-<NN>`. Same SEV/NN rules as agent findings.
+    Severity inherits the most severe constituent rating. Appears only on
+    the first row of each group.
+  - **Citation** — One finding ID per row, linked to the agent's review file
+    with a markdown anchor: `[EE-boundary-CRT-01](engine-engineer-design-1.md#EE-boundary-CRT-01)`.
+  - **Issue** and **Recommendation** — same rules as agent findings.
+
+  Each cited finding gets its own row. The first row carries the META ID;
+  subsequent rows leave ID blank and carry only their citation, issue, and
+  recommendation. When a cited agent agrees entirely with the row above it,
+  leave Issue and Recommendation blank — the citation alone signals agreement.
+  When agents agree on the issue but assigned different severities, attribute
+  the Issue and Recommendation to the agent with the highest severity and
+  leave the others blank.
+
+  Example:
+
+  | ID | Citation | Issue | Recommendation |
+  |---|---|---|---|
+  | META-boundary-CRT-01 | [EE-boundary-CRT-01](engine-engineer-design-1.md#EE-boundary-CRT-01) | stream lacks null check for year 0 | add guard clause at stream head |
+  | | [PE-boundary-CRT-02](principal-engineer-design-1.md#PE-boundary-CRT-02) | stream produces wrong value at boundary | redesign stream to internalize boundary |
+  | | [EE-boundary-MAJ-04](engine-engineer-design-1.md#EE-boundary-MAJ-04) | | |
+
 - Priority recommendation for what to address first.
-
-## Iteration 2+
-
-Re-reviews are driven by the orchestrator diffing prior findings against
-current artifacts — not by asking agents to read their own prior output.
 
 ## Partitioning Strategy
 
@@ -105,15 +151,3 @@ Apply [agent-partitioning-strategy.md](agent-partitioning-strategy.md).
 - Reviewers do not read each other's output.
 - Each reviewer's perspective is independent.
 
----
-
-## Known Issues (Rework Needed)
-
-- **Lane drift**: Agents produce findings outside their personality's domain
-  despite explicit constraints. The structured table format above (replacing
-  prose findings) is intended to help but hasn't been validated yet.
-- **Iteration mechanics**: The old model asked agents to re-review their own
-  prior output, which compounded drift. The new model (orchestrator-driven
-  diffing) is specified above but not yet implemented.
-- **Scope from git diff**: Underspecified — needs clearer rules about what
-  agents read in full vs. skim.
