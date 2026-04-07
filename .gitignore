@@ -1,0 +1,29 @@
+venv/
+reviews/
+
+# Python
+.pytest_cache/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.env
+
+# Node/frontend
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/
+
+# Coverage
+.coverage
+htmlcov/
