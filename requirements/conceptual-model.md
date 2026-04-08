@@ -24,6 +24,15 @@ it captures their behavioral implications for the system.
 | streams / composition | A stream may compose child streams. Child streams may themselves carry attributes and compose further children. |
 | streams / timeline | The plan timeline spans from the earliest stream start to the latest stream end. It is not independently configured. |
 
+## D: Formulas
+
+| Path | Description |
+|------|-------------|
+| formulas / balance-recurrence | Family of recurrence relations for projecting account balances year over year. All variants compute p(y) from p(y-1), a growth rate, and net cash flow for the year. |
+| formulas / balance-recurrence / end-of-year | End-of-year convention. Growth applies to the prior balance; net flow is added after growth. p(y) = p(y-1) * (1 + rate) + net-flow. |
+| formulas / balance-recurrence / beginning-of-year | Beginning-of-year convention. Net flow is added first; growth applies to the adjusted balance. p(y) = (p(y-1) + net-flow) * (1 + rate). |
+| formulas / balance-recurrence / mid-year | Mid-year convention. Net flow is assumed to occur at mid-year and earns a half-year of growth. p(y) = p(y-1) * (1 + rate) + net-flow * (1 + rate/2). |
+
 ## S: Assumptions
 
 | Path | Description |
@@ -96,6 +105,7 @@ it captures their behavioral implications for the system.
 | assumptions / policy / tax / se / rate | Self-employment tax rates — Social Security and Medicare components. |
 | assumptions / policy / tax / se / wage-base | Social Security wage base for SE tax. Inflation-indexed annually. |
 | assumptions / policy / tax / state / rate | State income tax rate. Defaults to 0. User-configurable. |
+| assumptions / policy / medicare / eligibility-age | Age at which a household member becomes eligible for Medicare. |
 | assumptions / policy / medicare / irmaa / tiers | IRMAA income tiers and per-person monthly surcharge amounts for Parts B and D. Adjustable by statute. |
 | assumptions / policy / aca / fpl | Federal poverty level by household size. Updated annually by HHS. |
 | assumptions / policy / aca / subsidy-cliff | Income threshold as percentage of FPL above which ACA subsidies phase out. Default 400%. |

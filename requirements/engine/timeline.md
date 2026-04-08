@@ -1,0 +1,13 @@
+# Timeline & Demographics
+
+| Path | Tag | Requirement |
+|------|-----|-------------|
+| R:engine / timeline | CORE | The plan must span a defined range of projection years per [D:streams / timeline](../conceptual-model.md#d-streams). |
+| R:engine / timeline / [ member ] | CORE | Each [S:household / [ member ]](../conceptual-model.md#s-household) must have a derivable age for every year in the projection range. |
+| R:engine / timeline / [ member ] : retirement-year | MVP | Each income-earning [S:household / [ member ]](../conceptual-model.md#s-household) must have a configurable retirement year. |
+| R:engine / timeline / [ member ] : retirement-year / phase-boundary | MVP | The retirement year must mark the boundary between working and retired phases for that member. |
+| R:engine / timeline / [ member ] : ss-claiming-age | MVP | Each income-earning [S:household / [ member ]](../conceptual-model.md#s-household) must have a configurable Social Security claiming age. |
+| R:engine / timeline / [ member ] : ss-claiming-age / range-constraint | MVP | The Social Security claiming age must fall within the range defined by [S:assumptions / policy / ss / fra](../conceptual-model.md#s-assumptions). |
+| R:engine / timeline / [ member ] : rmd-start-age | MVP | Each income-earning [S:household / [ member ]](../conceptual-model.md#s-household)'s RMD start age must be derived from their birth year using [S:assumptions / policy / rmd / start-age](../conceptual-model.md#s-assumptions). |
+| R:engine / timeline / [ member ] : dependent-age-out | MVP | Each dependent [S:household / [ member ]](../conceptual-model.md#s-household) must have a configurable age-out age. |
+| R:engine / timeline / [ member ] : dependent-age-out / budget-exit | MVP | When a dependent reaches their age-out age, they must leave the household budget. |
