@@ -9,4 +9,4 @@
 
 ## Artifacts
 
-Read [requirements/engine/](../../../../requirements/engine/) deeply. Read `high-level.md` for scope.
+Read [requirements/engine/](../../../../requirements/engine/) deeply.

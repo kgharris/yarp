@@ -7,6 +7,7 @@ included here so they are always active during interactive sessions. Orchestrate
 workflows deliver them via the context assembly protocol instead.
 
 @bedrock-principles.md
+@requirements/conceptual-model.md
 @requirements/principles.md
 @design/principles.md
 @ai/personalities/principles.md

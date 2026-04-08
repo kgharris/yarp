@@ -4,7 +4,6 @@ Artifacts live under [requirements/](../../../requirements/).
 
 ## Structure
 
-- `high-level.md` — cross-cutting; read by all personalities at this phase
 - `engine/` — computation and data requirements
 - `ux/` — user interface and interaction requirements
 
@@ -35,6 +34,6 @@ Test: could a domain expert validate this without knowing the tech stack? If not
 
 ## Altitude
 
-- **Forest:** read `high-level.md` then survey `engine/` and `ux/` at breadth
-- **Branch:** read your domain's subtree deeply; read `high-level.md` for scope
-- **Leaf:** read your subsystem's subtree exhaustively; read `high-level.md` for scope
+- **Forest:** survey `engine/` and `ux/` at breadth
+- **Branch:** read your domain's subtree deeply
+- **Leaf:** read your subsystem's subtree exhaustively

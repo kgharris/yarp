@@ -23,25 +23,26 @@ given combination. The order matters — each layer builds on the previous.
 ### Always included
 
 1. `bedrock-principles.md` — foundational principles (separation of concerns, MVC)
-2. `ai/personalities/principles.md` — altitude model, scope discipline
+2. `requirements/conceptual-model.md` — domain entity model (denominations, streams, formulas, assumptions, household)
+3. `ai/personalities/principles.md` — altitude model, scope discipline
 
 ### Phase-dependent (when phase is known)
 
-3. `ai/workflows/context/<phase>.md` — what this phase is, what it excludes,
+4. `ai/workflows/context/<phase>.md` — what this phase is, what it excludes,
    artifact locations, altitude-specific reading guidance
-4. `<phase>/principles.md` — phase-level principles (design principles,
+5. `<phase>/principles.md` — phase-level principles (design principles,
    implementation principles, testing principles). Not all phases have one.
 
 ### Subsystem-dependent (when subsystem is known)
 
-5. `<phase>/<subsystem>/principles.md` — subsystem-specific principles and
+6. `<phase>/<subsystem>/principles.md` — subsystem-specific principles and
    MVC constraints. Only included when both phase and subsystem are known.
 
 ### Personality-dependent (when personality is assigned)
 
-6. `ai/personalities/<personality>.md` — role, altitude, what to flag, what
+7. `ai/personalities/<personality>.md` — role, altitude, what to flag, what
    to skip
-7. `ai/personalities/context/<personality>/<phase>.md` — phase-specific focus
+8. `ai/personalities/context/<personality>/<phase>.md` — phase-specific focus
    and questions for this personality. Only included when both personality and
    phase are known.
 
@@ -68,27 +69,30 @@ given combination. The order matters — each layer builds on the previous.
 
 Assembled context (in order):
 1. `bedrock-principles.md`
-2. `ai/personalities/principles.md`
-3. `ai/workflows/context/design.md`
-4. `design/principles.md`
-5. `design/engine/principles.md`
-6. `ai/personalities/engine-engineer.md`
-7. `ai/personalities/context/engine-engineer/design.md`
+2. `requirements/conceptual-model.md`
+3. `ai/personalities/principles.md`
+4. `ai/workflows/context/design.md`
+5. `design/principles.md`
+6. `design/engine/principles.md`
+7. `ai/personalities/engine-engineer.md`
+8. `ai/personalities/context/engine-engineer/design.md`
 
 ## Example: Principal Engineer, Requirements Phase
 
 Assembled context (in order):
 1. `bedrock-principles.md`
-2. `ai/personalities/principles.md`
-3. `ai/workflows/context/requirements.md`
-4. (no `requirements/principles.md` — doesn't exist)
-5. (no subsystem — Forest agent)
-6. `ai/personalities/principal-engineer.md`
-7. `ai/personalities/context/principal-engineer/requirements.md`
+2. `requirements/conceptual-model.md`
+3. `ai/personalities/principles.md`
+4. `ai/workflows/context/requirements.md`
+5. `requirements/principles.md`
+6. (no subsystem — Forest agent)
+7. `ai/personalities/principal-engineer.md`
+8. `ai/personalities/context/principal-engineer/requirements.md`
 
 ## Example: Fix Application (no personality)
 
 Assembled context (in order):
 1. `bedrock-principles.md`
-2. `ai/personalities/principles.md`
-3. (phase may or may not apply depending on what's being fixed)
+2. `requirements/conceptual-model.md`
+3. `ai/personalities/principles.md`
+4. (phase may or may not apply depending on what's being fixed)

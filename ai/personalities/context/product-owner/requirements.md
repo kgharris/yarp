@@ -9,4 +9,4 @@
 
 ## Artifacts
 
-Read [requirements/](../../../../requirements/) at breadth — `high-level.md` first, then all subsystems.
+Read [requirements/](../../../../requirements/) at breadth across all subsystems.
