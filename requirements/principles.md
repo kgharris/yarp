@@ -5,6 +5,71 @@ antipatterns, not general advice.
 
 ---
 
+## Specification Conventions
+
+Requirements are specified as trees expressed in tables. Each row has four columns:
+
+| Column | Purpose |
+|--------|---------|
+| **Path** | Location in the requirements tree. See path syntax below. |
+| **Tag** | Scope classification. See tags below. |
+| **Requirement** | What the system must do or what the user must experience. |
+| **Acceptance Criteria** | Observable conditions under which the requirement is satisfied. |
+
+### Path Syntax
+
+Paths use `lower-case-with-dashes` naming throughout. Every path carries a type
+prefix that distinguishes what it points to:
+
+- `D:` — a **definition path**. Points to a definition entry (e.g., denomination
+  frames, stream primitives).
+- `S:` — a **stream path**. Points to a stream node, set node, or attribute in
+  the conceptual model.
+- `R:` — a **requirement path**. Points to a requirement row in a specification
+  table.
+
+A stream path and a requirement path may share the same tree location — they refer
+to different things. `S:household / [ member ]` is the member stream itself.
+`R:household / [ member ]` is the requirement row that defines what that stream
+must do.
+
+Three operators build the tree:
+
+- `/` separates parent from child (composition)
+- `[ name ]` denotes a set node — a collection of instances; each element is a stream
+- `: name` denotes an attribute — a scalar property of the parent stream
+
+Within a document, paths are relative — the document's own slug is omitted
+(e.g., `S:household / [ member ]`). When referencing from outside, use a
+leading `/` after the prefix to form a fully qualified path
+(e.g., `S:/conceptual-model / household / [ member ]`). The `/` immediately
+after the prefix distinguishes fully qualified from relative paths.
+
+**Examples — stream paths:**
+
+| Context | Path | Refers to |
+|---------|------|-----------|
+| Inside `conceptual-model.md` | `S:household / [ member ]` | The member stream (relative) |
+| From another document | `S:/conceptual-model / household / [ member ]` | Same stream (fully qualified) |
+| Attribute | `S:assumptions / rates / defaults : large-cap` | The `large-cap` attribute of the `defaults` stream |
+| Nested sets | `S:income / w2 / [ member ] / [ employer ]` | Employer income stream within a member set |
+
+**Examples — requirement paths:**
+
+| Context | Path | Refers to |
+|---------|------|-----------|
+| Inside `conceptual-model.md` | `R:withdrawals / [ member ] / [ 401k ] / rmd` | The RMD withdrawal requirement (relative) |
+| From another document | `R:/conceptual-model / withdrawals / [ member ] / [ 401k ] / rmd` | Same requirement (fully qualified) |
+
+### Tags
+
+- `CORE` — foundational invariant; the system cannot exist without it
+- `MVP` — minimum viable product; implemented in the initial release
+- `FUT` — future; not in scope for MVP
+- `R<YY.MM>` — targeted release (e.g., `R26.07`)
+
+---
+
 ## Solutioning Is Not a Requirement
 
 A requirement states what the system must do or what the user must experience. It
