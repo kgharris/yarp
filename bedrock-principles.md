@@ -32,6 +32,25 @@ No layer reaches across another. The View never reads raw Model data directly. T
 
 ---
 
+## Data-Driven Business Rules
+
+Business rules that are subject to external change — tax brackets, IRS contribution
+limits, RMD divisor tables, Social Security parameters, IRMAA tiers, ACA thresholds,
+estate tax exclusions — must be represented as data, not as logic.
+
+Algorithms operate on rule data; they do not embed rule values. When a bracket
+threshold changes, a data entry changes. No algorithm changes. When the IRS adjusts
+contribution limits, a configuration value changes. No code changes. Requirements
+define the structure and behavior of data (e.g., "a birth-year-to-start-age mapping
+table"); they do not enumerate the specific values that populate it. Specific values
+are shipped data, sourced from authoritative external publications and updatable
+without changing requirements, design, or code.
+
+**The test:** if a tax law changes, should any algorithm change? No — only data
+should change. If the answer is yes, the rule is embedded in the wrong place.
+
+---
+
 ## Stream-Based Computation
 
 Every time-varying quantity in the data model is a stream. Account balances, asset
@@ -51,6 +70,12 @@ Streams also capture user intent over time. When a user sets an asset allocation
 carries the allocation forward until the next user-specified point, then transitions.
 The projection logic that consumes allocations never checks transition rules — it reads
 the stream value for each year.
+
+Data-driven business rules and streams interrelate: externally-sourced rule data (tax
+brackets, contribution limits, RMD tables) is delivered to the engine as streams. The
+stream carries the rule data for each year; the algorithm consumes whatever the stream
+produces without knowing whether the value came from a shipped default, a user override,
+or an inflation-adjusted projection.
 
 The streams model is the architectural foundation for how the system handles complex
 time sequencing. Because streams uniformly span the full timeline and encode their own

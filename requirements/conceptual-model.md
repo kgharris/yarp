@@ -10,10 +10,10 @@ it captures their behavioral implications for the system.
 |------|-------------|
 | denomination | Every dollar amount is denominated in exactly one of the four reference frames defined in bedrock principles. An amount without a known denomination is meaningless. |
 | denomination / yzv | Year Zero Value. Dollars denominated in the plan's anchor year. Fixed at plan creation. |
-| denomination / cyv | Current Year Value. Dollars denominated in the current calendar year's purchasing power. Slides forward annually. |
-| denomination / fyv | Future Year Value. Dollars denominated in a specific projection year's nominal terms. Always derived, never observed. |
-| denomination / pyv | Past Year Value. Dollars denominated in a specific historical year's nominal terms. Always observed, never derived. |
-| denomination / display | User-facing dollar values default to current-year purchasing power (CYV). |
+| denomination / cnv | Current Nominal Value. Dollars denominated in the current calendar year's purchasing power. Slides forward annually. |
+| denomination / ynv | Year Nominal Value. Dollars denominated in a specific projection year's nominal terms. Always derived, never observed. |
+| denomination / pnv | Past Nominal Value. Dollars denominated in a specific historical year's nominal terms. Always observed, never derived. |
+| denomination / display | User-facing dollar values default to current-year purchasing power ([D:denomination / cnv](#d-denomination)). |
 
 ## D: Streams
 

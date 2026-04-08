@@ -5,31 +5,6 @@ antipatterns, not general advice.
 
 ---
 
-## Data-Driven Business Rules
-
-Business rules that are subject to external change — tax brackets, IRS contribution
-limits, RMD divisor tables, Social Security parameters, IRMAA tiers, ACA thresholds,
-estate tax exclusions — must be represented as data, not as logic.
-
-Algorithms operate on rule data; they do not embed rule values. When a bracket
-threshold changes, a table entry changes. No algorithm changes. When the IRS adjusts
-contribution limits, a configuration value changes. No code changes.
-
-This applies at every layer of the design:
-- The **DB layer** owns the storage and versioning of rule data
-- The **Engine** receives rule data as input and applies it; it does not contain it
-- The **Controller** resolves which rule data applies to a given tax year before
-  passing it to the Engine
-
-**Antipattern:** an algorithm that contains a literal like `0.22` for a tax rate, `73`
-for RMD start age, or `$7,000` for an IRA limit. Any value that an IRS publication
-could change belongs in rule data, not in an algorithm.
-
-**The test:** if a tax law changes, should any algorithm change? No — only data
-should change. If the answer is yes, the rule is embedded in the wrong place.
-
----
-
 ## Do Not Replicate Functionality
 
 Common logic belongs in shared modules, classes, or functions — imported wherever
