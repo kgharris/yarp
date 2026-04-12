@@ -88,13 +88,38 @@ workflow.
 
 If no plan is specified and no path can be inferred, ask before proceeding.
 
+## Task Commands
+
+When asked to "run a task" or "ask the <personality> to <do something>", execute
+under the [task-orchestrator.md](ai/workflows/task-orchestrator.md) workflow.
+
+Derive parameters from natural language:
+
+- **personality**: the named reviewer (e.g., "ask the engine engineer", "have the
+  product owner", "use the financial domain reviewer")
+- **phase**: derive from context or ask if unclear
+- **task**: the specific thing the agent should do, taken from the user's words
+
+If personality or task is unclear, ask before proceeding.
+
 ## Draft Swarm Command
 
 When asked to "draft a swarm" or "create a swarm definition", write a new
-swarm definition file to `reviews/swarm.md` following the structure in
-[sample-swarm.md](ai/workflows/sample-swarm.md). The user's prompt describes
-the goals of the swarm — use it to populate the Objective, Scope, Search
-Criteria, Context for Agents, and Output Filename sections.
+swarm definition file to `reviews/swarm.md` following the structure defined
+in [swarm-orchestrator.md](ai/workflows/swarm-orchestrator.md).
+
+Choose the mode based on the user's intent:
+
+- **`search` mode** — the user wants to audit files for violations, conflicts,
+  or antipatterns. Populate: Mode, Objective, Scope, Search Criteria,
+  Context for Agents, Output Filename. See
+  [sample-swarm.md](ai/workflows/sample-swarm.md) for a reference example.
+
+- **`personality` mode** — the user wants to produce artifacts (design docs,
+  requirements sections, analysis) by running a personality agent per subdomain.
+  Populate: Mode, Personality, Phase, Objective, Partitions (name / task /
+  output / optional scope per partition), Context for Agents (if shared context
+  is needed), Output Filename.
 
 After writing the draft, stop and present a summary so the user can review
 before running it. Do not auto-launch the swarm.

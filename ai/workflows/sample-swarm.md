@@ -1,5 +1,8 @@
 # Swarm Definition: Technology Stack Conflicts
 
+## Mode
+search
+
 ## Objective
 
 Find language, assumptions, or references that conflict with the decided
