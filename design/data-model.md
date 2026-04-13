@@ -37,9 +37,8 @@ StreamStart =
 2. Else if the stream is owned by a member (`OwnedBy::Member` or
    `OwnedBy::MemberAccount`) → ends at `member.birth_year + member.death_age`.
 3. Else if the stream is owned by a bounded entity (e.g., `Account` with a
-   `closing_year`, `Property` with a `sale_year`, `Business` with an
-   `exit_year`) → ends when that entity field indicates, or extends to the plan
-   timeline end if the field is `None`.
+   `closing_year`, `Property` with a `sale_year`) → ends when that entity field
+   indicates, or extends to the plan timeline end if the field is `None`.
 4. Else (plan-owned and policy streams) → extends to the plan timeline end,
    which is itself derived from all member lifetimes.
 
@@ -69,7 +68,7 @@ LifecycleEvent {
     label:     Option<string>,   -- required for Custom events; None for named kinds
 }
 
-EventKind = Retirement | SocialSecurityClaiming | Custom
+EventKind = Retirement | SocialSecurityClaiming | MedicareEligibility | Custom
 ```
 
 A `LifecycleEvent` with `kind = Retirement` fires at `member.birth_year +
@@ -173,7 +172,6 @@ OwnedBy =
     | JointAccount(account_id: Uuid)
     | Property(property_id: Uuid)
     | Vehicle(vehicle_id: Uuid)
-    | Business(business_id: Uuid)
     | Liability(liability_id: Uuid)
     | Relationship(from_member: Uuid, to_member: Uuid)
     | PolicyTable(table_id: Uuid)
@@ -335,7 +333,7 @@ StreamKind =
     -- Policy — HSA
     | PolicyHsaLimitsStream
 
-    -- Projection outputs (computed; not stored inputs)
+    -- Projection outputs (ephemeral; computed on demand, never persisted)
     | ProjectionAccountBalanceStream
 ```
 
@@ -427,12 +425,11 @@ Member {
     death_age:      i32,             -- planning horizon end, expressed as age
     role:           MemberRole,
     retirement_age: Option<i32>,     -- None if not applicable
-    ss_claiming_age: Option<i32>,    -- None if member has no SS benefit stream
 }
 ```
 
 `birth_year` is the member's single calendar anchor. Every derived calendar
-event — retirement, SS claiming — is computed as `birth_year + age`. Storing
+event — retirement — is computed as `birth_year + age`. Storing
 ages rather than calendar years means that correcting `birth_year` automatically
 shifts all downstream events.
 
@@ -515,22 +512,10 @@ AccountBalanceStream for account A:
 ```
 
 **Denomination separation:** The `AccountBalanceStream` stream holds user-entered
-seed values in `YZV`. Observed historical year-end snapshots are stored in
-a separate `HistoricalBalance` record (denomination `PNV(reference_year)`).
-Projected year-end balances are written by the engine to a separate
+seed values in `YZV`. The engine seeds projection from the `AccountBalanceStream`
+YZV value. Projected year-end balances are written by the engine to a separate
 `ProjectionAccountBalanceStream` stream (denomination `YNV(year)`). A single stream
 does not carry two denominations.
-
-```
-HistoricalBalance {
-    account_id:      Uuid,
-    reference_year:  i32,
-    balance:         Decimal,   -- [PNV(reference_year)]
-}
-```
-
-The engine uses the most recent `HistoricalBalance` as the seed for projection.
-`HistoricalBalance` records are immutable once recorded.
 
 ---
 
@@ -706,13 +691,16 @@ ContributionHsaEmployeeStream:
     kind         = ContributionHsaEmployeeStream
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
-    -- active while member has HDHP coverage (working phase)
+    start        = MemberAge(M.id, age: <employment_start_age>)
+    terminates   = OnEvent(medicare_event_id)   -- MedicareEligibility event for this member
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]
 
 ContributionHsaEmployerStream:
     kind         = ContributionHsaEmployerStream
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
+    start        = MemberAge(M.id, age: <employment_start_age>)
+    terminates   = OnEvent(medicare_event_id)   -- MedicareEligibility event for this member
     -- user-supplied annual amount; [YZV]
 ```
 
@@ -798,6 +786,7 @@ WithdrawalHsaQualifiedStream:
     kind         = WithdrawalHsaQualifiedStream
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
+    -- end derived from account ownership chain (natural account end)
     -- matched against eligible health expenses; tax-free
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]; negative = outflow
 ```
@@ -892,12 +881,14 @@ CreditLine {
 ```
 CreditLineBalanceStream:
     kind         = CreditLineBalanceStream
+    owner        = Liability(CreditLine.id)
     start        = CalendarYear(start_year)
     -- end derived from CreditLine.end_year per stream lifecycle rule 3
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV] revolving balance per year
 
 CreditLinePaymentStream:
     kind         = CreditLinePaymentStream
+    owner        = Liability(CreditLine.id)
     start        = CalendarYear(start_year)
     -- end derived from CreditLine.end_year per stream lifecycle rule 3
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV] annual minimum or configured payment
@@ -937,7 +928,7 @@ ReturnRateLargeCapStream:
     owner        = Plan(plan_id)
     start        = CalendarYear(plan.anchor_year)
     -- end derived from plan timeline (rule 4)
-    value_schema = AttributeMap([{ key: "value", unit: Rate }])   -- dimensionless; annual expected return
+    value_schema = AttributeMap([{ key: "value", unit: Rate }])   -- dimensionless; annual expected nominal return (not real)
 
 -- ReturnRateSmallCapStream, ReturnRateInternationalStream, ReturnRateBondsStream,
 -- ReturnRateRealEstateStream follow the same structure.
@@ -955,6 +946,8 @@ DepreciationRateVehicleStream:
 Allocation streams are multi-attribute. Each point carries a named percentage
 per asset class. The sum of all allocation attribute values for any active point
 must equal 1.0 — this is a single-point validation, not a cross-stream constraint.
+Years with no stored point emit the identity value (all attributes 0, sum 0), which
+is valid and indicates the stream is out of scope for that year.
 
 ```
 AllocationStream:
@@ -966,7 +959,7 @@ AllocationStream:
         { key: "bonds",         unit: Decimal },
         { key: "real_estate",   unit: Decimal },
     ])
-    -- Invariant: sum of all attribute values = 1.0 for each active point
+    -- Invariant: sum of all attribute values = 1.0 for each stored point; 0 for identity (out-of-scope) years
 
 -- Plan-level global (one per plan):
     owner  = Plan(plan_id)
@@ -1021,8 +1014,9 @@ PolicyHsaLimitsStream:
 
 ## Projection Output Streams
 
-The projection engine writes its results as streams. Output streams are computed,
-not stored as inputs. All output stream points carry denomination `YNV(point.year)`.
+The projection engine writes its results as streams. Output streams are ephemeral —
+computed on demand and never persisted. All output stream points carry denomination
+`YNV(point.year)`.
 
 ```
 ProjectionAccountBalanceStream (per account):
@@ -1030,13 +1024,12 @@ ProjectionAccountBalanceStream (per account):
     owner        = Account(account_id)
     start        = CalendarYear(account.opening_year)
     -- end derived from plan timeline end (rule 4)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
+    value_schema = AttributeMap([
+        { key: "value",         unit: Decimal },   -- [YNV(point.year)] end-of-year balance
+        { key: "effective_rate", unit: Rate },      -- dimensionless; weighted nominal return for this account and year
+    ])
     -- Each point: denomination = YNV(point.year)
     -- Distinct from AccountBalanceStream; that stream holds YZV seed inputs.
-    -- Account balance floor = 0; engine enforces before writing each point.
-    -- Floor-hit behavior: the point value is clamped to zero. The shortfall
-    --   (the amount by which net_flow would have driven the balance negative)
-    --   is absorbed silently — no shortfall stream is produced in MVP.
 ```
 
 **Balance recurrence formula** (end-of-year convention per
@@ -1052,12 +1045,22 @@ algebraic sum of all contribution (positive) and withdrawal (negative) stream
 values for that year, converted from `YZV` to `YNV(y)` before the recurrence
 is applied.
 
+The seed value `p(opening_year - 1)` is the `AccountBalanceStream` YZV entry for
+the account — the balance immediately before the account's first active projection
+year.
+
+The YZV-to-YNV conversion for a stream value in year `y` is:
+
+```
+value_ynv = value_yzv * (1 + r)^(y − anchor_year)
+```
+
+where `r` is the annual CPI rate from `InflationCpiStream`. Example:
+`anchor_year = 2025`, `r = 3%`, `y = 2026`, `value_yzv = $10,000` → `value_ynv = $10,300`.
+
 ---
 
 ## Design Invariants
-
-These invariants are enforced at plan construction time (fail-fast at
-boundaries), not deferred to projection.
 
 1. All `[YZV]`-denominated entity fields contain values denominated in
    `anchor_year` dollars. No `CNV` or `YNV` values may be stored in input
@@ -1069,8 +1072,9 @@ boundaries), not deferred to projection.
    The denomination of any stored point is determinable from the point record
    alone.
 
-4. All `AllocationStream`s must have attribute values summing to 1.0 for
-   every active point. Validation is per-point — not a cross-stream constraint.
+4. All `AllocationStream` stored points must have attribute values summing to 1.0.
+   Years with no stored point emit the identity value (all attributes 0, sum 0),
+   which is valid. Validation is per stored point — not a cross-stream constraint.
 
 5. Every `MemberAge` start references a `member_id` that exists in the plan's
    household. Dangling member references are invalid.
@@ -1088,14 +1092,11 @@ boundaries), not deferred to projection.
 9. `MemberLifecycleStream` streams are resolved before all streams that reference
    them in each projection year. This is the canonical engine resolution order.
 
-10. `HistoricalBalance` records are immutable once recorded. `PNV` values are
-    observed facts; they are never converted to another denomination silently.
-
-11. A spousal relationship (`RelationSpouseStream`) requires exactly one other member
+10. A spousal relationship (`RelationSpouseStream`) requires exactly one other member
     with `MemberRole = Primary` or `MemberRole = Spouse` in the household. At
     most one spousal pair is permitted per plan.
 
-12. `AccountBalanceStream` streams must have `start` year `>= account.opening_year`.
+11. `AccountBalanceStream` streams must have `start` year `>= account.opening_year`.
 
 ---
 
@@ -1124,9 +1125,9 @@ features are implemented.
 
 ## Cross-Reference Index
 
-This table maps every `S:` path from the conceptual model to its design record
-in this document. Every path from all sections (Assumptions, Household, Assets,
-Contributions, Withdrawals, Liabilities) appears exactly once.
+This table maps `S:` paths from the conceptual model to their design records
+in this document. Only paths with a corresponding MVP or CORE `R:` requirement
+are included; FUT and unanchored paths are omitted.
 
 | Conceptual Model Path | Anchor Record | StreamKind |
 |-----------------------|---------------|------------|

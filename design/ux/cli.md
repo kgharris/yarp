@@ -31,7 +31,8 @@ The CLI has exactly two mutually exclusive modes:
 | **Generate** | `--generate-plan <dir>` is given | Write a minimal runnable plan directory |
 
 Supplying both a positional directory and `--generate-plan` in the same
-invocation is an error (exit 1, message to stderr).
+invocation is an error (exit 1, message to stderr). Supplying both `--json`
+and `--table` in the same invocation is also an error (exit 1, message to stderr).
 
 ---
 
@@ -59,22 +60,26 @@ One positional argument. No subcommands.
 
 Before running the projection, the CLI validates:
 
-1. **Required assumptions present** — all fields in
-   [S:assumptions](../../requirements/conceptual-model.md#s-assumptions) that
-   have no default must be populated. Missing required assumptions cause exit 1
-   with a message listing the missing paths.
-2. **Allocations sum to 100%** — all allocation streams must sum to exactly 100%
-   for every active year. Any year in violation causes exit 1 with a message
-   identifying the year and the computed sum.
+1. **Directory exists** — if `<dir>` does not exist, exit 1 with message to
+   stderr: `error: directory not found: <path>`. If the directory exists but is
+   not a valid plan store, exit 1 with: `error: not a valid plan store: <path>`.
+2. **No members or no accounts** — a plan with no members or no accounts is
+   invalid; exit 1 with a descriptive message to stderr.
+3. **Required assumptions present** — all assumption fields with no shipped
+   default must be populated. Missing fields cause exit 1; one line per missing
+   field on stderr using `S:` path syntax (e.g.,
+   `error: missing required assumption: S:assumptions / inflation / cpi`).
+4. **Allocations sum to 100%** — all allocation streams must sum to exactly 100%
+   for every active year. Any year in violation causes exit 1; one line per
+   violation on stderr: `error: allocation sums to <N>% in year <Y>`.
 
 Validation failures are reported to stderr; stdout receives nothing.
 
 ### Denomination
 
-All monetary values are displayed in CNV (current nominal value, current calendar
-year purchasing power) per
-[D:denomination / display](../../requirements/conceptual-model.md#d-denomination).
-No denomination toggle is provided.
+All monetary values are output in YNV (year nominal value) — each year's values
+are denominated in that year's nominal dollars. No denomination conversion is
+applied. No denomination toggle is provided.
 
 ### Data Shape
 
@@ -82,15 +87,15 @@ All output formats share the same orientation: **columns are years, rows are
 streams**. The first column is a row label; subsequent columns are one per
 projection year in ascending order.
 
-Row labels use the entity IDs from the plan files verbatim. No friendly names
-are applied.
+Row labels use user-defined names from the plan: `Member.given_name` for members,
+`Account.label` for accounts.
 
 Rows emitted, in order:
 
 | Row label | Content |
 |-----------|---------|
-| `age.<member_id>` | Age of the member in that year (one row per member) |
-| `bal.<account_id>` | End-of-year account balance (one row per account) |
+| `age.<given_name>` | Age of the member in that year (one row per member) |
+| `bal.<label>` | End-of-year account balance (one row per account) |
 
 ### CSV Output (default)
 
@@ -111,25 +116,23 @@ A single JSON object written to stdout:
 
 ```json
 {
-  "denomination": "cnv",
-  "cnv_year": <current calendar year>,
+  "denomination": "ynv",
   "years": [2025, 2026, ...],
   "rows": [
-    { "stream": "age.<id>", "values": [45, 46, ...] },
-    { "stream": "bal.<id>", "values": [123456.78, 130000.00, ...] },
+    { "stream": "age.<given_name>", "values": [45, 46, ...] },
+    { "stream": "bal.<label>", "values": [123456.78, 130000.00, ...] },
     ...
   ]
 }
 ```
 
-- `denomination` is always `"cnv"`.
-- `cnv_year` is the calendar year used as the CNV reference frame.
+- `denomination` is always `"ynv"`. Each year's values are in that year's nominal dollars.
 - `years` lists the projection years in ascending order.
 - `rows` is an array of objects in the same row order as CSV. Each object has
   a `stream` label and a `values` array parallel to `years`.
-- Monetary values are JSON numbers (not strings). No currency symbols.
-- All numeric values are rounded to two decimal places in output only; internal
-  computation remains full-precision.
+- Monetary values are JSON numbers (not strings), rounded to two decimal places
+  in output only; internal computation remains full-precision. No currency symbols.
+- Age values are JSON integers.
 
 ---
 
@@ -140,17 +143,23 @@ path must not already exist; if it does, the CLI exits 1 with an error to stderr
 
 The generated plan contains:
 
-- One household member with placeholder birth year and death age.
+- One household member with `birth_year = current_year − 35`, `death_age = 90`,
+  `retirement_age = 65`.
 - One traditional 401k account with a starting balance.
 - One bank account with a starting balance.
 - A full set of assumptions populated with placeholder values (inflation rates,
-  return rates, allocations summing to 100%, IRS policy limits for the current
-  year).
+  return rates, allocations summing to 100%).
 - One retirement lifecycle event.
 
-The generated plan must pass projection-mode validation and produce output
-without error before the user makes any edits. The generated files are in
-`JsonPlanStore` format — they are directly editable JSON.
+All monetary placeholder values are YZV denominated in `anchor_year`, where
+`anchor_year` equals the current calendar year at generation time.
+
+After writing the plan files, the CLI runs projection-mode validation on the
+generated directory. If validation fails, the CLI exits 1 with the validation
+error on stderr. A successful `--generate-plan` run guarantees that
+`yarp-cli <dir>` exits 0 immediately afterward without user edits.
+
+The generated files are in `JsonPlanStore` format — they are directly editable JSON.
 
 ---
 

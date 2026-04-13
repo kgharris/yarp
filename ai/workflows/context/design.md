@@ -42,3 +42,11 @@ Test: could this be implemented in a different language without changing the des
 - **Forest:** read `architecture.md`, skim `data-model.md`, then survey each subsystem directory at breadth
 - **Branch:** read cross-cutting docs relevant to your domain deeply; read your domain's subtree deeply
 - **Leaf:** read `architecture.md` for orientation, then read your subsystem directory exhaustively
+
+## Principles vs. Requirements Scope
+
+Design principles (including `architecture.md`, `design/principles.md`, and subsystem principles files) describe **architectural intent and direction**. They name responsibilities, assign ownership, and establish constraints — but they do not determine what must be implemented for MVP.
+
+**Scope is owned by requirements**, not principles. The MVP/FUT tags on requirement rows are the authoritative signal for what must be designed now. A principle that names a responsibility (e.g., "the Controller manages scenario state") is establishing where that concern belongs architecturally — it is not a commitment that the design must fully specify that concern today.
+
+**Do not raise a finding** because a principle names a responsibility that has no current design record, if the corresponding requirements are tagged FUT or absent entirely. The correct reading is: the architecture has reserved that responsibility for the future; it is not a gap in the current design.
