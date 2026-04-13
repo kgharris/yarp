@@ -48,6 +48,7 @@ it captures their behavioral implications for the system.
 | assumptions / rates / international | Return rate stream for international equities. |
 | assumptions / rates / bonds | Return rate stream for bonds. |
 | assumptions / rates / real-estate | Return rate stream for real estate. |
+| assumptions / rates / vehicle | Depreciation rate stream for vehicles. |
 | assumptions / rates / [ custom ] | A user-defined return rate stream for an additional asset class. |
 | assumptions / allocations | Target asset allocation percentages across asset classes (large-cap, small-cap, international, bonds). Allocations sum to 100%. |
 | assumptions / allocations / [ member ] / [ account ] | Allocation override stream for a specific member-owned account. |
@@ -89,26 +90,26 @@ it captures their behavioral implications for the system.
 | assumptions / policy / ss | Social Security regulatory parameters. |
 | assumptions / policy / ss / fra | Full retirement age by birth year per SSA rules. |
 | assumptions / policy / ss / delayed-credit-rate | Benefit increase rate per year of delayed claiming past FRA, up to age 70. |
-| assumptions / policy / ss / taxation-thresholds | Combined income thresholds determining taxable percentage of SS benefits. Not inflation-indexed. |
-| assumptions / policy / ss / taxation-thresholds : floor-mfj | Lower combined-income threshold for MFJ (below which 0% is taxable). |
-| assumptions / policy / ss / taxation-thresholds : ceiling-mfj | Upper combined-income threshold for MFJ (above which up to 85% is taxable). |
+| assumptions / policy / ss / taxation-thresholds | Combined-income thresholds determining the taxable percentage of SS benefits. Not inflation-indexed. |
+| assumptions / policy / ss / taxation-thresholds : floor-mfj | Lower combined-income threshold for MFJ (below which 0% of SS benefits is taxable). |
+| assumptions / policy / ss / taxation-thresholds : ceiling-mfj | Upper combined-income threshold for MFJ (above which up to 85% of SS benefits is taxable). |
 | assumptions / policy / ss / taxation-thresholds : floor-single | Lower combined-income threshold for single filers. |
 | assumptions / policy / ss / taxation-thresholds : ceiling-single | Upper combined-income threshold for single filers. |
 | assumptions / policy / tax | Federal tax policy parameters. |
-| assumptions / policy / tax / federal / brackets | Federal income tax brackets — rates and income thresholds per year, by filing status. |
+| assumptions / policy / tax / federal / brackets | Federal tax brackets — rates and taxable-amount thresholds per year, by filing status. |
 | assumptions / policy / tax / federal / standard-deduction | Standard deduction amount per year by filing status. Inflation-adjusted. |
 | assumptions / policy / tax / capital-gains / brackets | Long-term capital gains tax brackets — rates and income thresholds per year. |
 | assumptions / policy / tax / niit / rate | Net investment income tax rate. Default 3.8%. |
-| assumptions / policy / tax / niit / threshold | NIIT income thresholds by filing status. Not inflation-indexed. |
-| assumptions / policy / tax / niit / threshold : mfj | NIIT income threshold for married filing jointly. |
-| assumptions / policy / tax / niit / threshold : single | NIIT income threshold for single filers. |
+| assumptions / policy / tax / niit / threshold | NIIT net investment income thresholds by filing status. Not inflation-indexed. |
+| assumptions / policy / tax / niit / threshold : mfj | NIIT net investment income threshold for married filing jointly. |
+| assumptions / policy / tax / niit / threshold : single | NIIT net investment income threshold for single filers. |
 | assumptions / policy / tax / se / rate | Self-employment tax rates — Social Security and Medicare components. |
 | assumptions / policy / tax / se / wage-base | Social Security wage base for SE tax. Inflation-indexed annually. |
 | assumptions / policy / tax / state / rate | State income tax rate. Defaults to 0. User-configurable. |
 | assumptions / policy / medicare / eligibility-age | Age at which a household member becomes eligible for Medicare. |
 | assumptions / policy / medicare / irmaa / tiers | IRMAA income tiers and per-person monthly surcharge amounts for Parts B and D. Adjustable by statute. |
 | assumptions / policy / aca / fpl | Federal poverty level by household size. Updated annually by HHS. |
-| assumptions / policy / aca / subsidy-cliff | Income threshold as percentage of FPL above which ACA subsidies phase out. Default 400%. |
+| assumptions / policy / aca / subsidy-cliff | Household cash inflow threshold as a percentage of FPL above which ACA subsidies phase out. Default 400%. |
 | assumptions / policy / estate / exclusion | Federal estate tax exclusion amount. Per-decedent; supports portability multiplier for surviving spouse. |
 
 ## S: Household
@@ -141,7 +142,7 @@ it captures their behavioral implications for the system.
 | assets / hard-assets / properties / [ vacation-home ] | A vacation or secondary home. |
 | assets / hard-assets / properties / [ parcel ] | An individual land parcel. |
 | assets / hard-assets / [ vehicle ] | An individual vehicle. |
-| assets / [ business ] | A business entity that generates income and/or holds equity value. |
+| assets / [ business ] | A business entity that generates cash inflows and/or holds equity value. |
 
 ## S: Contributions
 
@@ -194,37 +195,3 @@ it captures their behavioral implications for the system.
 | liabilities / [ interest-only-loan ] | An interest-only obligation (e.g. HELOC). |
 | liabilities / [ credit-line ] | A revolving credit obligation (credit cards, etc). |
 
-## S: Income
-
-| Path | Description |
-|------|-------------|
-| income | An income source produces income over an active period. |
-| income / w2 / [ member ] / [ employer ] | W-2 wage and salary income from a specific employer for a specific member. |
-| income / 1099 / [ member ] / [ source ] | 1099 self-employment or contract income from a specific source for a specific member. |
-| income / ss / [ member ] | Social Security benefit stream for a specific member. Claiming age and benefit amount vary per member. |
-| income / pension / [ member ] | Defined-benefit pension income for a specific member. |
-| income / k1 / [ member ] / [ entity ] | K-1 pass-through income from a specific business entity for a specific member. |
-| income / 1099-r / [ member ] | 1099-R retirement account distribution income for a specific member. |
-| income / rental / [ member ] / [ property ] | Rental income from a specific property for a specific member. |
-
-## S: Expenses
-
-| Path | Description |
-|------|-------------|
-| expenses | An expense consumes funds over an active period. Categorized for tax treatment and account-matching purposes. |
-| expenses / housing | Housing-related expenses (property tax, maintenance, insurance, HOA). Excludes mortgage principal/interest which is a liability. |
-| expenses / health | Health-related expenses. Subject to healthcare cost inflation. Eligible for HSA matching. |
-| expenses / health / insurance | Health insurance premiums. Phases by life stage: employer-sponsored, ACA marketplace, and Medicare. |
-| expenses / health / insurance / employer | Employer-sponsored health insurance premiums. |
-| expenses / health / insurance / aca | ACA marketplace premiums (early retirement to age 65). |
-| expenses / health / insurance / medicare | Medicare premiums (Parts B/D, supplemental, IRMAA surcharges). |
-| expenses / health / out-of-pocket | Out-of-pocket medical costs. |
-| expenses / health / long-term-care | Long-term care insurance premiums. |
-| expenses / [ insurance-policy ] | A non-health insurance policy (auto, life, umbrella). |
-| expenses / living | Essential living expenses (food, utilities, transportation). |
-| expenses / discretionary | Discretionary spending (travel, entertainment, hobbies). |
-| expenses / [ custom ] | A user-defined expense stream. |
-| expenses / [ member ] / education / [ enrollment ] | Education costs for a specific enrollment period (tuition, fees, supplies). |
-| expenses / [ member ] / childcare | Childcare or daycare costs for a specific member. |
-| expenses / [ member ] / activities | Extracurricular activities, camps, lessons for a specific member. |
-| expenses / [ member ] / personal-care | Personal care expenses for a specific member (clothing, grooming, personal supplies). |

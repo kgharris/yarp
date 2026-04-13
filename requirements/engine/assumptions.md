@@ -7,6 +7,7 @@
 | R:engine / assumptions / inflation / cpi-w | MVP | The plan must support a CPI-W rate per [S:assumptions / inflation / cpi-w](../conceptual-model.md#s-assumptions) used for Social Security COLA adjustments. In MVP the default value is equal to [S:assumptions / inflation / cpi](../conceptual-model.md#s-assumptions) and is not required to be independently configurable. |
 | R:engine / assumptions / rates / large-cap | MVP | The plan must support a configurable return rate assumption per [S:assumptions / rates / large-cap](../conceptual-model.md#s-assumptions). |
 | R:engine / assumptions / rates / bonds | MVP | The plan must support a configurable return rate assumption per [S:assumptions / rates / bonds](../conceptual-model.md#s-assumptions). |
+| R:engine / assumptions / rates / vehicle | MVP | The plan must support a configurable vehicle depreciation rate per [S:assumptions / rates / vehicle](../conceptual-model.md#s-assumptions). |
 | R:engine / assumptions / allocations | MVP | The plan must support a configurable asset allocation per [S:assumptions / allocations](../conceptual-model.md#s-assumptions). |
 | R:engine / assumptions / allocations : sum | CORE | [S:assumptions / allocations](../conceptual-model.md#s-assumptions) must sum to 100%. |
 | R:engine / assumptions / policy / limits / 401k | MVP | The plan must enforce 401k contribution limits using [S:assumptions / policy / limits / 401k](../conceptual-model.md#s-assumptions). |

@@ -104,6 +104,36 @@ outside the engine; no raw model data is read directly by the UX.
 
 ---
 
+## Design for Test
+
+The engine is a pure Rust library crate with no I/O or IPC dependencies. It can be
+instantiated and exercised directly in unit and integration tests without standing up
+the Tauri runtime or the frontend.
+
+The [CLI requirement](../requirements/ux/cli.md) (`R:ux / cli / projection-table`) is
+satisfied by a thin CLI application wrapper that embeds the engine as a library
+dependency, drives it directly, and writes the resulting projection table to stdout.
+This is the same engine that the full Tauri application uses — no fork, no stub. The
+CLI wrapper exists solely to satisfy the test infrastructure use case: it provides a
+headless, scriptable entry point for running the engine against a plan file and
+inspecting output without a UI. JSON output (`R:ux / cli / output-format : json`) is
+supported for programmatic consumption by tests and CI pipelines.
+
+---
+
+## MVP Scope
+
+The MVP is a CLI-only release. The Tauri/React desktop application is a planned future
+phase. The CLI (`yarp-cli`) serves as both the MVP user interface and the primary test
+harness: it embeds the engine as a library, drives it directly against a plan file, and
+writes output to stdout. The Controller, IPC bridge, and React frontend described in the
+Technology Stack and System Layers sections are part of the target architecture but are
+not built in the MVP. The engine and DB layers are shared between the CLI and the future
+Tauri application — there is no fork; the CLI is simply a different host for the same
+library.
+
+---
+
 ## Artifact Map
 
 | Concern | Where to look |

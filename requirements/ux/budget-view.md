@@ -2,7 +2,7 @@
 
 > **THE CONTENT THAT BELONGS IN THIS FILE IS NOT PART OF MVP**
 
-Retirement year income presentation, tax computation transparency, withdrawal
-sequencing visibility, expense breakdown by category, Roth conversion details,
-RMD details, surplus/deficit tracking, survivor scenario analysis, year
-selection and context, and dollar-value denomination control.
+This view is part of the retirement budget concept, which is not yet designed.
+It will cover income and expense configuration, withdrawal sequencing, tax
+computation transparency, Roth conversion details, RMD details, surplus/deficit
+tracking, survivor scenario analysis, year selection, and denomination control.

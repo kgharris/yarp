@@ -2,7 +2,7 @@
 
 | Path | Tag | Requirement |
 |------|-----|-------------|
-| R:engine / contributions / [ member ] / [ 401k ] / employee : deferral | MVP | Each income-earning [S:household / [ member ]](../conceptual-model.md#s-household) must be able to make [S:contributions / [ member ] / [ 401k ] / employee](../conceptual-model.md#s-contributions) to [S:assets / accounts / [ member ] / [ 401k ]](../conceptual-model.md#s-assets). |
+| R:engine / contributions / [ member ] / [ 401k ] / employee : deferral | MVP | Each working-phase [S:household / [ member ]](../conceptual-model.md#s-household) must be able to make [S:contributions / [ member ] / [ 401k ] / employee](../conceptual-model.md#s-contributions) to [S:assets / accounts / [ member ] / [ 401k ]](../conceptual-model.md#s-assets). |
 | R:engine / contributions / [ member ] / [ 401k ] / employee : working-phase | MVP | [S:contributions / [ member ] / [ 401k ] / employee](../conceptual-model.md#s-contributions) must be restricted to the working phase of [S:household / [ member ]](../conceptual-model.md#s-household). |
 | R:engine / contributions / [ member ] / [ 401k ] / employee : limit | MVP | [S:contributions / [ member ] / [ 401k ] / employee](../conceptual-model.md#s-contributions) must be subject to the limits defined in [S:assumptions / policy / limits / 401k](../conceptual-model.md#s-assumptions). |
 | R:engine / contributions / [ member ] / [ 401k ] / employer : match | MVP | [S:contributions / [ member ] / [ 401k ] / employer](../conceptual-model.md#s-contributions) must be computed as a configurable match rate applied to [S:contributions / [ member ] / [ 401k ] / employee](../conceptual-model.md#s-contributions) deferrals up to a configurable deferral ceiling. |
