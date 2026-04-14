@@ -281,21 +281,7 @@ StreamKind =
     | AccountBalanceStream
 
     -- Cash flows (contributions and withdrawals)
-    | Contribution401kEmployeeStream
-    | Contribution401kEmployerStream
-    | ContributionRoth401kEmployeeStream
-    | ContributionRoth401kEmployerStream
-    | ContributionIraStandardStream
-    | ContributionRothIraStandardStream
-    | ContributionHsaEmployeeStream
-    | ContributionHsaEmployerStream
-    | Contribution401kCatchupStream
-    | ContributionRoth401kCatchupStream
-    | ContributionIraCatchupStream
-    | ContributionRothIraCatchupStream
-    | ContributionHsaCatchupStream
-    | ContributionBankStream
-    | ContributionBrokerageStream
+    | ContributionStream
     | Withdrawal401kStandardStream
     | WithdrawalRoth401kStream
     | WithdrawalIraStandardStream
@@ -364,15 +350,23 @@ FilingStatus = Single | MarriedFilingJointly
 
 MemberRole = Primary | Spouse
 
-RelationKind = Spouse
-
 PropertyKind = PrimaryResidence | VacationHome | LandParcel
 
 LiabilityKind = AmortizedLoan | InterestOnlyLoan | CreditLine
 
-InflationRef = Cpi | None
-
 HsaCoverageType = SelfOnly | Family
+
+ContributionRole =
+    -- 401k
+      Employee401k | Employer401k | Catchup401k
+    -- Roth 401k
+    | EmployeeRoth401k | EmployerRoth401k | CatchupRoth401k
+    -- IRA / Roth IRA
+    | StandardIra | CatchupIra | StandardRothIra | CatchupRothIra
+    -- HSA
+    | EmployeeHsa | EmployerHsa | CatchupHsa
+    -- Bank / Brokerage
+    | Bank | Brokerage
 ```
 
 ---
@@ -457,6 +451,11 @@ MemberLifecycleStream for member M:
 The `phase` attribute transitions from `working` to `retired` at
 `birth_year + retirement_age`. Consumers read the attribute from the stream;
 no branching on age in consumer code.
+
+**Plan-construction invariant:** `MemberLifecycleStream` must have an explicit
+anchor point at `age = 0` with `phase = 0` (working). This anchor is required;
+without it the carry-forward rule has no initial value and pre-retirement phase
+is undefined.
 
 **Design invariant — resolution order:** `MemberLifecycleStream` streams are resolved
 before all streams that reference them (cash inflow streams, contribution bounds,
@@ -581,144 +580,163 @@ one-to-many relationship keyed on `(account_id, kind)`. The engine resolves
 contributions for an account by querying all contribution streams owned by
 that account.
 
+All contribution streams share a single `kind = ContributionStream`. The `role`
+attribute identifies the contribution type for future limit enforcement; the engine
+dispatches to the appropriate limit bucket by reading `role`. All values are
+`[YZV]`; positive = inflow.
+
 ### 401k Contributions
 
 ```
-Contribution401kEmployeeStream for member M on account A:
-    kind         = Contribution401kEmployeeStream
+ContributionStream for member M on account A (Employee401k):
+    kind         = ContributionStream
+    role         = Employee401k
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
-    start        = MemberAge(M.id, age: hire_age)
+    start        = MemberAge(M.id, age: <employment_start_age>)
     terminates   = OnEvent(retirement_event_id)
     -- retirement_event_id references LifecycleEvent { kind: Retirement, age: M.retirement_age }
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]; positive = inflow
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-Contribution401kEmployerStream:
-    kind         = Contribution401kEmployerStream
+ContributionStream for member M on account A (Employer401k):
+    kind         = ContributionStream
+    role         = Employer401k
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
-    start        = MemberAge(M.id, age: hire_age)
+    start        = MemberAge(M.id, age: <employment_start_age>)
     terminates   = OnEvent(retirement_event_id)
-    -- user-supplied annual amount; [YZV]
-```
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-Contribution401kCatchupStream:
-    kind         = Contribution401kCatchupStream
+ContributionStream for member M on account A (Catchup401k):
+    kind         = ContributionStream
+    role         = Catchup401k
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: 50)
     terminates   = OnEvent(retirement_event_id)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]; positive = inflow
-    -- The applicable limit varies by age at projection time (policy-driven):
-    --   ages 50–59 and 64+: standard catchup limit
-    --   ages 60–63: SECURE 2.0 super-catchup limit (higher)
-    -- The engine enforces the age-appropriate limit; no separate stream kind for the super-catchup window.
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
+    -- When limits are in scope: age-tiered limit applies (ages 50–59 and 64+: standard
+    --   catchup; ages 60–63: SECURE 2.0 super-catchup). Role is sufficient to dispatch.
+```
 
 ### Roth 401k Contributions
 
 ```
-ContributionRoth401kEmployeeStream:
-    kind         = ContributionRoth401kEmployeeStream
+ContributionStream for member M on account A (EmployeeRoth401k):
+    kind         = ContributionStream
+    role         = EmployeeRoth401k
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
-    start        = MemberAge(M.id, age: hire_age)
+    start        = MemberAge(M.id, age: <employment_start_age>)
     terminates   = OnEvent(retirement_event_id)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-ContributionRoth401kEmployerStream:
-    kind         = ContributionRoth401kEmployerStream
+ContributionStream for member M on account A (EmployerRoth401k):
+    kind         = ContributionStream
+    role         = EmployerRoth401k
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
-    start        = MemberAge(M.id, age: hire_age)
+    start        = MemberAge(M.id, age: <employment_start_age>)
     terminates   = OnEvent(retirement_event_id)
-    -- user-supplied annual amount; [YZV]
-```
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-ContributionRoth401kCatchupStream:
-    kind         = ContributionRoth401kCatchupStream
+ContributionStream for member M on account A (CatchupRoth401k):
+    kind         = ContributionStream
+    role         = CatchupRoth401k
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: 50)
     terminates   = OnEvent(retirement_event_id)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]; positive = inflow
-    -- Same age-tiered limit as Contribution401kCatchupStream; combined limit shared with 401k catchup.
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
+    -- Combined catchup limit shared with Catchup401k per member when limits are in scope.
+```
 
 ### IRA Contributions
 
 ```
-ContributionIraStandardStream:
-    kind         = ContributionIraStandardStream
+ContributionStream for member M on account A (StandardIra):
+    kind         = ContributionStream
+    role         = StandardIra
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: 0)
-    -- no terminates — open-ended; ends at member death (natural bound)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]
-```
+    -- no terminates — ends at member death (natural bound)
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-ContributionIraCatchupStream:
-    kind         = ContributionIraCatchupStream
+ContributionStream for member M on account A (CatchupIra):
+    kind         = ContributionStream
+    role         = CatchupIra
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: 50)
-    -- no terminates — open-ended; ends at member death (natural bound)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]; positive = inflow
+    -- no terminates — ends at member death (natural bound)
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
+```
 
 ### Roth IRA Contributions
 
 ```
-ContributionRothIraStandardStream:
-    kind         = ContributionRothIraStandardStream
+ContributionStream for member M on account A (StandardRothIra):
+    kind         = ContributionStream
+    role         = StandardRothIra
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: 0)
-    -- no terminates — open-ended; ends at member death (natural bound)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]
-```
+    -- no terminates — ends at member death (natural bound)
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-ContributionRothIraCatchupStream:
-    kind         = ContributionRothIraCatchupStream
+ContributionStream for member M on account A (CatchupRothIra):
+    kind         = ContributionStream
+    role         = CatchupRothIra
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: 50)
-    -- no terminates — open-ended; ends at member death (natural bound)
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]; positive = inflow
-    -- Combined IRA catchup limit is shared across ContributionIraCatchupStream and ContributionRothIraCatchupStream per member.
+    -- no terminates — ends at member death (natural bound)
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
+    -- Combined IRA catchup limit shared with CatchupIra per member when limits are in scope.
+```
 
 ### HSA Contributions
 
 ```
-ContributionHsaEmployeeStream:
-    kind         = ContributionHsaEmployeeStream
+ContributionStream for member M on account A (EmployeeHsa):
+    kind         = ContributionStream
+    role         = EmployeeHsa
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: <employment_start_age>)
-    terminates   = OnEvent(medicare_event_id)   -- MedicareEligibility event for this member
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]
+    terminates   = OnEvent(medicare_event_id)
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-ContributionHsaEmployerStream:
-    kind         = ContributionHsaEmployerStream
+ContributionStream for member M on account A (EmployerHsa):
+    kind         = ContributionStream
+    role         = EmployerHsa
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: <employment_start_age>)
-    terminates   = OnEvent(medicare_event_id)   -- MedicareEligibility event for this member
-    -- user-supplied annual amount; [YZV]
-```
+    terminates   = OnEvent(medicare_event_id)
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 
-ContributionHsaCatchupStream:
-    kind         = ContributionHsaCatchupStream
+ContributionStream for member M on account A (CatchupHsa):
+    kind         = ContributionStream
+    role         = CatchupHsa
     owner        = MemberAccount(M.id, A.id)
     parent_id    = A's AccountBalanceStream id
     start        = MemberAge(M.id, age: 55)
-    -- no terminates — active as long as member has HDHP coverage
-    value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV]; positive = inflow
-    -- Fixed $1,000/year; never inflation-adjusted. Engine enforces the fixed limit regardless of stored value.
+    -- no terminates — ends when HDHP coverage ends (modeled via natural bound for MVP)
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
+```
 
 ### Bank and Brokerage Contributions
 
 ```
-ContributionBankStream and ContributionBrokerageStream:
-    -- owner discriminates MemberAccount from JointAccount
-    -- denomination = YZV; value = annual deposit amount
+ContributionStream (Bank or Brokerage):
+    kind         = ContributionStream
+    role         = Bank | Brokerage
+    owner        = MemberAccount(M.id, A.id) | JointAccount(A.id)
+    parent_id    = A's AccountBalanceStream id
+    -- no start, no terminates — open-ended; owner discriminates member vs joint
+    value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 ```
 
 ---
@@ -938,28 +956,54 @@ DepreciationRateVehicleStream:
     owner        = Plan(plan_id)
     start        = CalendarYear(plan.anchor_year)
     -- end derived from plan timeline (rule 4)
-    value_schema = AttributeMap([{ key: "value", unit: Rate }])   -- [YZV]; annual depreciation rate (e.g., 0.15 = 15%/year)
+    value_schema = AttributeMap([{ key: "value", unit: Rate }])   -- dimensionless; negative rate (e.g., -0.15 = 15%/year depreciation)
 ```
 
 ### Allocation Assumptions
 
-Allocation streams are multi-attribute. Each point carries a named percentage
-per asset class. The sum of all allocation attribute values for any active point
-must equal 1.0 — this is a single-point validation, not a cross-stream constraint.
-Years with no stored point emit the identity value (all attributes 0, sum 0), which
-is valid and indicates the stream is out of scope for that year.
+Allocation streams are multi-attribute. Each point carries a named fraction per
+asset class; fractions are dimensionless (0.0–1.0) and must sum to 1.0 for every
+explicitly stored point.
+
+Allocations are **not** meaningful in isolation — they are a lookup table used
+during dollar-stream projection. For each year the engine projects an account
+balance, it looks up the effective allocation for that year and derives a weighted
+return rate. The allocation itself never appears in output.
+
+**Lookup semantics within an active stream:**
+Allocation attributes use `unit: Rate`, giving them carry-forward identity
+semantics. If a year within the stream's active range has no stored point, the
+engine carries forward the most recently stored point (recursing backward until
+one is found). This means a user who sets allocations once at age 30 gets those
+same allocations in every subsequent year unless they add another anchor. Every
+`AllocationStream` must have at least one stored point — a stream with no anchor
+points at all is a plan-construction error.
+
+**Lookup outside an active stream:**
+If the engine looks up an allocation for a year outside the stream's active
+range (before `start` or after its derived end), the stream is not applicable
+for that year. The engine treats this the same as no stream existing for that
+account-year: it falls back to the plan-level `AllocationStream`. For years
+before the plan-level stream's `start`, there is no active account to project —
+no lookup occurs.
+
+**Zero is never a valid in-scope allocation.** An all-zeros result from an
+allocation lookup is a data error — it means either the stream has no anchor
+points (plan-construction error) or a bug in stream resolution. The engine must
+never use a zero-sum allocation to compute an effective rate.
 
 ```
 AllocationStream:
     kind         = AllocationStream
     value_schema = AttributeMap([
-        { key: "large_cap",     unit: Decimal },   -- fraction 0.0–1.0
-        { key: "small_cap",     unit: Decimal },
-        { key: "international", unit: Decimal },
-        { key: "bonds",         unit: Decimal },
-        { key: "real_estate",   unit: Decimal },
+        { key: "large_cap",     unit: Rate },   -- fraction 0.0–1.0; carry-forward
+        { key: "small_cap",     unit: Rate },
+        { key: "international", unit: Rate },
+        { key: "bonds",         unit: Rate },
+        { key: "real_estate",   unit: Rate },
     ])
-    -- Invariant: sum of all attribute values = 1.0 for each stored point; 0 for identity (out-of-scope) years
+    -- Invariant: sum of all attribute values = 1.0 for each stored point
+    -- Invariant: at least one stored point must exist (plan-construction requirement)
 
 -- Plan-level global (one per plan):
     owner  = Plan(plan_id)
@@ -975,10 +1019,10 @@ AllocationStream:
 ```
 
 The engine resolves the effective allocation for an account based on stream
-existence: if an `AllocationStream` is defined for the account, the engine
-reads allocations from it. Otherwise it reads from the plan-level `AllocationStream`
-stream (owner = Plan). An account either has its own allocation stream or it
-doesn't — there is no per-year switching between the two.
+existence: if an `AllocationStream` is defined for the account, the engine reads
+allocations from it for the years that stream is active. Otherwise it reads from
+the plan-level `AllocationStream`. An account either has its own allocation stream
+or it doesn't — there is no per-year switching between the two.
 
 ---
 
@@ -1035,8 +1079,10 @@ ProjectionAccountBalanceStream (per account):
 **Balance recurrence formula** (end-of-year convention per
 [D:formulas / balance-recurrence / end-of-year](../requirements/conceptual-model.md#d-formulas)):
 
+The recurrence is defined only for `y > opening_year`:
+
 ```
-p(y) = p(y-1) * (1 + effective_rate(y)) + net_flow(y)
+p(y) = p(y-1) * (1 + effective_rate(y)) + net_flow(y)     [y > opening_year]
 ```
 
 where `effective_rate(y)` is the weighted average of return rates using the
@@ -1045,18 +1091,47 @@ algebraic sum of all contribution (positive) and withdrawal (negative) stream
 values for that year, converted from `YZV` to `YNV(y)` before the recurrence
 is applied.
 
-The seed value `p(opening_year - 1)` is the `AccountBalanceStream` YZV entry for
-the account — the balance immediately before the account's first active projection
-year.
-
-The YZV-to-YNV conversion for a stream value in year `y` is:
+**Base case — the recurrence is undefined at `opening_year`.** The balance at
+`opening_year` is not computed by the recurrence; it is set directly from the
+user-entered opening balance stored in `AccountBalanceStream`, converted from
+`YZV` to `YNV(opening_year)`:
 
 ```
-value_ynv = value_yzv * (1 + r)^(y − anchor_year)
+p(opening_year) = seed_yzv * ∏(1 + r_t)   for t = anchor_year, …, opening_year−1
 ```
 
-where `r` is the annual CPI rate from `InflationCpiStream`. Example:
-`anchor_year = 2025`, `r = 3%`, `y = 2026`, `value_yzv = $10,000` → `value_ynv = $10,300`.
+where `seed_yzv` is the value stored in `AccountBalanceStream` for this account.
+If `opening_year == anchor_year`, the product is empty and `p(opening_year) = seed_yzv`
+(no inflation has elapsed). The recurrence then proceeds from `y = opening_year + 1`
+onward using `p(opening_year)` as `p(y-1)`.
+
+The YZV-to-YNV conversion for a stream value in year `y` is the per-year product
+of CPI rates from `InflationCpiStream`:
+
+```
+value_ynv = value_yzv * ∏(1 + r_t)   for t = anchor_year, anchor_year+1, …, y−1
+```
+
+where `r_t` is the rate emitted by `InflationCpiStream` for year `t`. Each year
+contributes its own rate; a single scalar exponent is only correct when CPI is
+constant across the entire projection window, which cannot be assumed.
+
+Example: `anchor_year = 2025`, `value_yzv = $10,000`, CPI rates: 3% in 2025,
+4% in 2026.
+- Converting to YNV(2026): `$10,000 * (1.03) = $10,300`
+- Converting to YNV(2027): `$10,000 * (1.03) * (1.04) = $10,712`
+
+**Balance floor.** After applying the recurrence, the result is clamped at zero:
+
+```
+p(y) = max(p(y-1) * (1 + effective_rate(y)) + net_flow(y), 0.0)
+```
+
+The value stored in `ProjectionAccountBalanceStream` for year `y` is never
+negative. In MVP (projection-only, no withdrawal sequencer), the floor can only
+be reached if net cash flow drives the balance below zero; no shortfall output
+is defined. When withdrawals are in scope, sequencing must ensure withdrawals
+do not exceed the available balance before the recurrence is applied.
 
 ---
 
@@ -1066,15 +1141,19 @@ where `r` is the annual CPI rate from `InflationCpiStream`. Example:
    `anchor_year` dollars. No `CNV` or `YNV` values may be stored in input
    entity fields.
 
-2. `CNV` never appears on any stored `StreamPoint`. CNV is a display-layer denomination. The engine converts to CNV on request; the controller forwards the denomination parameter.
+2. `CNV` never appears on any stored `StreamPoint`. CNV is a display-layer denomination. CNV conversion is FUT; the MVP engine outputs YNV only.
 
 3. For projection output stream points, `denomination = YNV(point.year)`.
    The denomination of any stored point is determinable from the point record
    alone.
 
 4. All `AllocationStream` stored points must have attribute values summing to 1.0.
-   Years with no stored point emit the identity value (all attributes 0, sum 0),
-   which is valid. Validation is per stored point — not a cross-stream constraint.
+   Every `AllocationStream` must have at least one stored point — a stream with no
+   anchor is a plan-construction error. Years within the active range with no stored
+   point carry forward from the most recent prior anchor (carry-forward identity per
+   `unit: Rate`). Years outside the active range are out of scope — the engine falls
+   back to the plan-level stream or performs no lookup. Zero is never a valid in-scope
+   allocation result.
 
 5. Every `MemberAge` start references a `member_id` that exists in the plan's
    household. Dangling member references are invalid.
@@ -1092,11 +1171,14 @@ where `r` is the annual CPI rate from `InflationCpiStream`. Example:
 9. `MemberLifecycleStream` streams are resolved before all streams that reference
    them in each projection year. This is the canonical engine resolution order.
 
-10. A spousal relationship (`RelationSpouseStream`) requires exactly one other member
+10. Every `MemberLifecycleStream` must have an explicit anchor at `age = 0` with
+    `phase = 0`. This is a plan-construction requirement enforced at load time.
+
+11. A spousal relationship (`RelationSpouseStream`) requires exactly one other member
     with `MemberRole = Primary` or `MemberRole = Spouse` in the household. At
     most one spousal pair is permitted per plan.
 
-11. `AccountBalanceStream` streams must have `start` year `>= account.opening_year`.
+12. `AccountBalanceStream` streams must have `start` year `>= account.opening_year`.
 
 ---
 

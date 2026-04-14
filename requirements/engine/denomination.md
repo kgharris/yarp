@@ -10,4 +10,3 @@
 | R:engine / denomination / cnv | FUT | The plan must support conversion of stored [D:denomination / yzv](../conceptual-model.md#d-denomination) values to [D:denomination / cnv](../conceptual-model.md#d-denomination) for user-facing display, using cumulative inflation from the anchor year to the current calendar year. |
 | R:engine / denomination / pnv | FUT | Historical actuals recorded in the plan — year-end balances, IRS-published limits, and other observed data — must be stored in [D:denomination / pnv](../conceptual-model.md#d-denomination), denominated in the nominal dollars of their reference date. |
 | R:engine / denomination / pnv : invariance | FUT | A value recorded as [D:denomination / pnv](../conceptual-model.md#d-denomination) must not be modified once committed. |
-| R:engine / denomination / display | MVP | Dollar values presented to the user must default to [D:denomination / cnv](../conceptual-model.md#d-denomination). |

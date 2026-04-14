@@ -45,8 +45,12 @@ Test: could this be implemented in a different language without changing the des
 
 ## Principles vs. Requirements Scope
 
-Design principles (including `architecture.md`, `design/principles.md`, and subsystem principles files) describe **architectural intent and direction**. They name responsibilities, assign ownership, and establish constraints — but they do not determine what must be implemented for MVP.
+Some documents in this project contain **forward-looking guidance** — they name responsibilities, reserve architectural territory, and introduce domain concepts that are not yet scoped for MVP. These documents must not generate findings solely because a named concept or responsibility has no current design coverage or MVP-tagged requirement:
 
-**Scope is owned by requirements**, not principles. The MVP/FUT tags on requirement rows are the authoritative signal for what must be designed now. A principle that names a responsibility (e.g., "the Controller manages scenario state") is establishing where that concern belongs architecturally — it is not a commitment that the design must fully specify that concern today.
+- `principles.md` files (bedrock, phase-level, and subsystem-level)
+- `requirements/conceptual-model.md`
+- `design/architecture.md`
 
-**Do not raise a finding** because a principle names a responsibility that has no current design record, if the corresponding requirements are tagged FUT or absent entirely. The correct reading is: the architecture has reserved that responsibility for the future; it is not a gap in the current design.
+The correct reading of an undesigned concept in these documents is: the architecture has reserved that space for the future. It is not a gap.
+
+**Actual design files are not exempt.** Design coverage in `design/data-model.md`, `design/engine/`, `design/db/`, `design/controller/`, and `design/ux/` must be anchored to an MVP-tagged requirement. Design that exists without a corresponding `MVP`-tagged `R:` row is unanchored — that is a legitimate finding.

@@ -104,6 +104,15 @@ outside the engine; no raw model data is read directly by the UX.
 
 ---
 
+## Model Facade
+
+The `Model` trait is the sole entry point into the Model layer for all callers.
+No caller above the facade ever holds a direct reference to `JsonPlanStore`,
+`MemoryPlanStore`, or any other backend. Full specification:
+[design/engine/api.md](engine/api.md).
+
+---
+
 ## Design for Test
 
 The engine is a pure Rust library crate with no I/O or IPC dependencies. It can be
