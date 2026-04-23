@@ -24,7 +24,7 @@ Any other contents are ignored.
 `plan.json` contains the complete plan — all entities, streams, stream points,
 assumptions, and lifecycle events — serialized as a single JSON object.
 
-The root object carries a schema version field used by the migration layer:
+The root object carries a schema version field:
 
 ```json
 {
@@ -33,9 +33,10 @@ The root object carries a schema version field used by the migration layer:
 }
 ```
 
-`schema_version` is an integer. The DB layer reads this field before
-deserializing `plan`. If the version is unrecognized, a `PlanStoreError::SchemaMismatch`
-is returned before any further parsing occurs.
+`schema_version` is an integer identifying the format this file was written
+in. The DB layer reads this field before deserializing `plan`. If the version
+does not match the version this binary supports, `PlanStoreError::SchemaMismatch`
+is returned before any further parsing occurs. Schema migration is out of scope.
 
 ---
 

@@ -14,9 +14,10 @@ facade delegates to internally.
 ```
 Model {
     /// Load a plan from a directory. Delegates to PlanStore::load(), which
-    /// runs schema migration and validation before returning. Callers receive
-    /// a clean Plan or a typed error — no raw or unversioned data escapes
-    /// this boundary.
+    /// checks the schema version and validates the plan before returning.
+    /// A version mismatch returns SchemaMismatch immediately — no migration
+    /// is attempted in MVP. Callers receive a clean Plan or a typed error;
+    /// no raw or unversioned data escapes this boundary.
     load(dir: &Path) -> Result<Plan, ModelError>
 
     /// Generate a minimal runnable plan and write it to a new directory.
@@ -24,6 +25,11 @@ Model {
     /// Constructs the Plan graph from GeneratePlanParams, then delegates to
     /// PlanStore::save() to persist it. The directory must not already exist.
     generate(dir: &Path, params: GeneratePlanParams) -> Result<(), ModelError>
+
+    /// Run the projection engine over a loaded plan. Output is always YNV —
+    /// no denomination parameter. The caller supplies a Plan previously
+    /// returned by load(); projection is stateless and has no side effects.
+    get_projection(plan: &Plan) -> Result<Projection, ModelError>
 }
 ```
 
@@ -47,6 +53,41 @@ in [design/ux/cli.md](../ux/cli.md#generate-mode).
 
 ---
 
+## Projection
+
+`Projection` is the output of `get_projection()`. It contains ephemeral
+projection streams and the resolved `MemberLifecycleStream` records from the
+plan. All dollar-denominated points carry denomination `YNV(point.year)`.
+
+```
+Projection {
+    years:   Vec<i32>,                         -- projection year range, ascending
+    streams: Vec<Stream>,                      -- ephemeral projection streams
+    points:  Map<StreamId, Vec<StreamPoint>>,  -- points keyed by stream id
+}
+```
+
+`streams` contains one entry for each:
+- Member lifecycle (`kind = MemberLifecycleStream`, `owner = Member(id)`) — carries
+  age and phase attributes per year
+- Account active in the plan timeline (`label = "balance"`, `owner = Account(id)`)
+- Property or vehicle (`label = "balance"`, `owner = Property(id) | Vehicle(id)`)
+- Liability (`label = "balance"`, `owner = Liability(id)`)
+- Plan-level aggregate (`label = "net-worth" | "retirement" | "health" | "taxable" |
+  "hard-assets" | "assets" | "liabilities" | "lt-liabilities" | "st-liabilities"`,
+  `owner = Plan(id)`)
+
+Callers navigate by filtering on `stream.label` and `stream.owner`. The CLI finds
+the balance for a specific account by locating the stream with
+`label = "balance"` and `owner = Account(account_id)`, then reads its `StreamPoint`
+entries in year order. Building a year-keyed table from those points is a rendering
+concern in the CLI — not the engine's responsibility.
+
+`Stream`, `StreamPoint`, and the full output stream schemas are defined in the
+Projection Output Streams section of [design/data-model.md](../data-model.md).
+
+---
+
 ## ModelError
 
 `ModelError` maps directly from `PlanStoreError`. Callers above the facade see
@@ -58,8 +99,12 @@ ModelError =
     | InvalidStore(path: Path)
     | SchemaMismatch { found: SchemaVersion, expected: SchemaVersion }
     | InvalidPlan(violations: Vec<PlanViolation>)
+    | InvalidArgument(message: String)
     | Io(source: OsError)
 ```
+
+Error format, type classification, message content, and the caller contract are
+defined in [design/error-handling.md](../error-handling.md).
 
 ---
 
@@ -94,5 +139,6 @@ the trait exposes.
 MVP data flow:
 
 ```
-yarp-cli  →  Model<JsonPlanStore>  →  JsonPlanStore  →  Engine  →  stdout
+yarp-cli  →  Model<JsonPlanStore>  →  JsonPlanStore (load/save)
+                                   →  Engine (get_projection)  →  stdout
 ```

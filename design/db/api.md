@@ -12,10 +12,10 @@ facade is its only consumer. No caller above the facade ever holds a direct
 PlanStore {
     /// Load a plan from the given directory.
     ///
-    /// Reads all plan files, runs any pending schema migrations, validates the
-    /// resulting plan graph, and returns a fully-resolved `Plan` ready for
-    /// engine consumption. The caller receives a clean `Plan` or a typed error
-    /// — no raw or unversioned data escapes the trait boundary.
+    /// Reads all plan files, validates the plan graph, and returns a
+    /// fully-resolved `Plan` ready for engine consumption. The caller receives
+    /// a clean `Plan` or a typed error — no raw or unversioned data escapes
+    /// the trait boundary.
     load(dir: &Path) -> Result<Plan, PlanStoreError>
 
     /// Persist a plan to the given directory.
@@ -43,10 +43,9 @@ PlanStoreError =
     | Io(source: OsError)           -- filesystem error; message is OS error verbatim
 ```
 
-`PlanViolation` carries the specific validation failure — no members, no
-accounts, missing required assumption, allocation sum error — in enough detail
-for the caller to produce the error messages defined in
-[design/ux/cli.md](../ux/cli.md#error-format).
+`PlanViolation` carries the specific validation failure in domain terms:
+violation kind, affected entity ID, and measured value (e.g., no members, no
+accounts, missing required assumption, allocation sum deviating from 1.0).
 
 ---
 
@@ -59,6 +58,12 @@ for the caller to produce the error messages defined in
 
 Both implement `PlanStore`. The Model facade binds to the trait; the concrete
 type is supplied at construction time and never exposed to callers above the facade.
+
+`MemoryPlanStore` exists solely for design-for-testability. Its construction
+interface is not specified here — test harnesses will construct and seed it in
+whatever way is convenient for the test scenario. Only the `PlanStore` trait
+contract matters; the internal structure is an implementation detail of the
+test infrastructure.
 
 ---
 

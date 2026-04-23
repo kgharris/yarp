@@ -47,6 +47,37 @@ The assembled context is delivered inline in the agent's prompt — agents
 do not fetch principles themselves. This is the primary control for
 preventing lane drift.
 
+## Finding Quality Bar
+
+A finding must clear this bar or it should not be raised. Reviewers are not
+evaluated on finding count — a review with zero findings and a thorough Passed
+Checks section is a valid and valuable output.
+
+**The test:** if this finding is ignored, will an implementer produce incorrect
+output, violate an architectural boundary, or be unable to proceed? If no, do
+not raise it.
+
+**Do not raise findings about:**
+
+- Divergence between a principles file and a spec — principles are orientation,
+  not contracts.
+- Missing error messages or error type variants — error-handling.md declares a
+  format; specific messages are implementation concerns.
+- Implementation details — JSON serialization shape, UUID strategy, serde
+  attributes, Rust type signatures, specific library choices.
+- Forward-looking content in orientation documents that is not part of MVP.
+- Behavior obvious from the data structure — tree traversal order, derivation
+  of values that are available in the data model.
+- Missing clarifying notes when the meaning is clear from context.
+- Unreachable code paths that exist as defensive design.
+- The absence of new types, enums, or variants when string labels or existing
+  composition mechanisms suffice.
+
+**Severity must be proportionate.** CRT means wrong, inconsistent, or missing
+in a way that will cause incorrect behavior or block implementation. A
+formatting preference or a suggestion for optional documentation is MIN at
+most. Inflated severity wastes triage time.
+
 ## Output Format
 
 Each reviewer writes: `reviews/<personality-file-stem>-<slug>-<iteration>.md`
@@ -103,13 +134,50 @@ Column definitions:
 - **Recommendation** — What should change. Be specific enough that a fix
   can be drafted without re-reading the surrounding context.
 
+## Orchestrator Triage
+
+After all reviewers complete and before producing the summary, the orchestrator
+triages every finding. The orchestrator has access to the project's feedback
+memory and prior review history. Its job is to filter noise so the user reviews
+only findings that would cause a wrong implementation or block progress.
+
+**Reject a finding if it matches any of these patterns:**
+
+- Flags divergence between a principles file and a spec — principles are
+  aspirational orientation, not contractual. Divergence is never a finding.
+- Asks for exhaustive error message catalogues — error-handling.md declares a
+  format. Specific messages are implementation concerns.
+- Flags implementation details as design gaps — JSON serialization shape, UUID
+  generation strategy, serde attribute choices, specific Rust type signatures.
+- Flags forward-looking content in orientation documents (architecture.md,
+  principles files) as if it should be MVP — it is intentionally forward-looking.
+- Flags behavior that is obvious from the data structure — tree traversal order,
+  year list derivation from stream points, implicit uniqueness constraints.
+- Asks for clarifying notes on things already clear from context.
+- Flags unreachable code paths that exist as defensive design.
+- Flags the absence of design coverage for FUT-tagged requirements — the scope
+  gate should have caught this, but if it leaked through, reject it here.
+- Describes a data-driven architecture concern that invents new types where
+  string labels or existing composition would suffice.
+- Inflates severity — a finding that is at most MIN should not be rated CRT or
+  MAJ. The orchestrator may downgrade severity when the agent's rating is
+  disproportionate to the actual impact.
+
+**The triage bar:** would this finding, if ignored, cause an implementer to
+produce incorrect output, violate an architectural boundary, or be unable to
+proceed? If no, reject it.
+
+Rejected findings are listed in a **Rejected by Orchestrator** appendix in the
+summary file with a one-line reason each. The user can review them if desired
+but is not expected to.
+
 ## Summary File
 
-After all reviewers complete, produce `reviews/summary-<slug>-<iteration>.md`:
+After triage, produce `reviews/summary-<slug>-<iteration>.md`:
 
-- Finding-count table by severity and reviewer.
-- **Consolidated Findings** table clustering related findings from different
-  reviewers. Sort by severity (CRT first, then MAJ, MIN, QST):
+- Finding-count table by severity and reviewer (active findings only).
+- **Consolidated Findings** table clustering related active findings from
+  different reviewers. Sort by severity (CRT first, then MAJ, MIN, QST):
 
   | ID | Citation | Issue | Recommendation |
   |---|---|---|---|
@@ -138,6 +206,14 @@ After all reviewers complete, produce `reviews/summary-<slug>-<iteration>.md`:
   | META-boundary-CRT-01 | [EE-boundary-CRT-01](engine-engineer-design-1.md#EE-boundary-CRT-01) | stream lacks null check for year 0 | add guard clause at stream head |
   | | [PE-boundary-CRT-02](principal-engineer-design-1.md#PE-boundary-CRT-02) | stream produces wrong value at boundary | redesign stream to internalize boundary |
   | | [EE-boundary-MAJ-04](engine-engineer-design-1.md#EE-boundary-MAJ-04) | | |
+
+- **Rejected by Orchestrator** appendix — a flat table of findings rejected
+  during triage:
+
+  | Agent Finding | Reason |
+  |---|---|
+  | EE-xxx-MIN-01 | Implementation detail (serde convention) |
+  | PE-xxx-CRT-02 | Principles divergence, not a spec issue |
 
 - Priority recommendation for what to address first.
 

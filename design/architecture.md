@@ -26,10 +26,10 @@ the controller mediates, the view renders.
 
 ### Engine
 
-- Pure computation: given plan data and a target denomination, produces projection output. No side effects.
+- Pure computation: given plan data, produces projection output. No side effects.
 - Evaluates streams year by year across the full plan timeline.
 - All internal monetary arithmetic uses arbitrary-precision decimal; no rounding.
-- The sole site of denomination conversion. Accepts a target denomination parameter and returns output in that frame.
+- Projection output is always YNV — denomination is determined by the output type, not a caller parameter. Views that offer alternate denomination display (e.g., CNV toggle) supply a denomination parameter; projection does not.
 - Modules do not call each other. The Controller sequences the pipeline.
 - No awareness of requests or serialization formats.
 
@@ -45,7 +45,7 @@ the controller mediates, the view renders.
 
 - Owns the command surface: receives IPC requests, validates inputs, shapes responses.
 - Orchestrates the engine pipeline — determines which modules run and in what order.
-- Forwards the UX's requested denomination to the Engine as a parameter; does not convert denominations itself.
+- For views with alternate denomination options, forwards the UX's requested denomination to the Engine as a parameter; does not convert denominations itself.
 - Manages scenario state: which scenario is active, overlay resolution.
 - Calls the Model facade for persistence; never accesses DB directly.
 - No financial computation. No rendering.
@@ -70,9 +70,7 @@ command from the UX to the Controller. The Controller validates the request and
 calls the Model facade to persist the updated assumption in YZV. It then
 orchestrates the engine pipeline: the engine reads the updated plan data and
 re-evaluates the affected streams, producing YNV projection output for each year.
-The UX specifies the desired denomination (default: CNV) in the request. The
-Controller forwards this to the engine, which converts and returns output in the
-requested denomination. The Controller serializes it into a view-ready payload
+The Controller serializes this into a view-ready payload
 and returns it over IPC. The UX receives
 the payload and re-renders the affected views. No financial computation occurs
 outside the engine; no raw model data is read directly by the UX.
@@ -85,9 +83,7 @@ outside the engine; no raw model data is read directly by the UX.
   frame: YZV, CNV, YNV, or PNV. An amount without a denomination is a bug.
 - **Storage is always YZV.** All persisted configuration and assumption values are
   in year-zero dollars. The anchor year is fixed at plan creation.
-- **Engine output is in the requested denomination.** The UX specifies the target
-  frame with each request; the Engine performs the conversion and returns output
-  in that frame.
+- **Projection output is always YNV.** Denomination conversion for display (e.g., CNV) is a view concern supplied as a parameter only for views that offer denomination options — not a projection parameter.
 - **Display defaults to CNV.** Users see current-year purchasing power unless they
   switch denomination modes.
 - **Historicals are PNV.** Observed actuals are recorded in the nominal dollars of

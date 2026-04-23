@@ -43,14 +43,29 @@ Test: could this be implemented in a different language without changing the des
 - **Branch:** read cross-cutting docs relevant to your domain deeply; read your domain's subtree deeply
 - **Leaf:** read `architecture.md` for orientation, then read your subsystem directory exhaustively
 
+## Scope Gate — Required Before Every Finding
+
+**Before raising any finding, consult the requirements.** This check is mandatory — it is not optional and it is not implied by domain knowledge or bedrock principles alone.
+
+**Finding about missing design coverage** — verify the corresponding `R:` row exists and is tagged `MVP`:
+- Tagged `FUT` → do not raise the finding. Absent design for a `FUT` requirement is intentional.
+- Row does not exist → do not raise the finding. Unspecified requirements have no design obligation.
+- Tagged `MVP` → the finding is in scope; proceed.
+
+**Finding about existing design behavior** — verify no MVP requirement already specifies that behavior:
+- If an MVP-tagged `R:` row already resolves the question the finding is raising, the finding is invalid.
+- Requirements are the authoritative answer to "what should this do." Bedrock principles establish the framework; requirements instantiate it. Check both before concluding something is ambiguous.
+
+**Domain expertise is not a scope override.** A personality file may list domain areas to watch (SS, RMD, CPI-W, IRMAA, etc.). These represent expertise to apply when examining in-scope features — they are not a scope-independent checklist. The personality file does not determine what is in scope; the requirements do.
+
 ## Principles vs. Requirements Scope
 
-Some documents in this project contain **forward-looking guidance** — they name responsibilities, reserve architectural territory, and introduce domain concepts that are not yet scoped for MVP. These documents must not generate findings solely because a named concept or responsibility has no current design coverage or MVP-tagged requirement:
+Some documents are **orientation documents** — they name responsibilities, reserve architectural territory, and introduce domain concepts that span MVP and beyond. Read them for context. Do not derive findings from them:
 
 - `principles.md` files (bedrock, phase-level, and subsystem-level)
 - `requirements/conceptual-model.md`
 - `design/architecture.md`
 
-The correct reading of an undesigned concept in these documents is: the architecture has reserved that space for the future. It is not a gap.
+A concept named in an orientation document has no design obligation until a corresponding MVP-tagged `R:` row exists. The scope gate above is the only test.
 
 **Actual design files are not exempt.** Design coverage in `design/data-model.md`, `design/engine/`, `design/db/`, `design/controller/`, and `design/ux/` must be anchored to an MVP-tagged requirement. Design that exists without a corresponding `MVP`-tagged `R:` row is unanchored — that is a legitimate finding.

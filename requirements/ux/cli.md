@@ -11,3 +11,4 @@
 | R:ux / cli / plan-input | MVP | The CLI must accept a path to a directory of JSON plan files as its plan data source. The files in that directory must be in the same format used by the DB layer. |
 | R:ux / cli / generate-plan | MVP | The CLI must provide a `--generate-plan` option that writes a valid initial plan directory to a specified path. The generated files must be editable by the user to describe their specific plan. `--generate-plan` and projection mode are mutually exclusive — invoking both in the same command must be treated as an error. |
 | R:ux / cli / generate-plan : runnable | MVP | The plan produced by `--generate-plan` must be immediately runnable — the CLI must be able to project it without error before the user makes any edits. |
+| R:ux / cli / generate-plan : confirmation | MVP | On success, `--generate-plan` must emit exactly one line to stdout: `Plan created in <dir>`, where `<dir>` is the path supplied by the user. |

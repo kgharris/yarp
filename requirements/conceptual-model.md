@@ -32,6 +32,7 @@ it captures their behavioral implications for the system.
 | formulas / balance-recurrence / end-of-year | End-of-year convention. Growth applies to the prior balance; net flow is added after growth. p(y) = p(y-1) * (1 + rate) + net-flow. |
 | formulas / balance-recurrence / beginning-of-year | Beginning-of-year convention. Net flow is added first; growth applies to the adjusted balance. p(y) = (p(y-1) + net-flow) * (1 + rate). |
 | formulas / balance-recurrence / mid-year | Mid-year convention. Net flow is assumed to occur at mid-year and earns a half-year of growth. p(y) = p(y-1) * (1 + rate) + net-flow * (1 + rate/2). |
+| formulas / effective-rate | The per-year effective growth rate substituted into balance-recurrence formulas. Defined as the weighted sum of per-asset-class return rates using allocation fractions as weights: effective_rate(y) = Σ( allocation(c, y) × return_rate(c, y) ) for each asset class c, where allocation(c, y) is the fraction from the resolved [S:assumptions / allocations](#s-assumptions) stream and return_rate(c, y) is the rate from the corresponding [S:assumptions / rates](#s-assumptions) stream. |
 
 ## S: Assumptions
 

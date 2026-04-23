@@ -40,12 +40,10 @@ The CLI has exactly two mutually exclusive modes:
 Invoking with no arguments emits a usage summary to stdout and exits 0.
 
 Supplying both a positional directory and `--generate-plan` in the same
-invocation is an error (exit 1, message to stderr):
-`error: invalid-argument: --generate-plan and a positional directory are mutually exclusive`
+invocation is an error (exit 1).
 
 Supplying both `--json` and `--table` in the same invocation is an error
-(exit 1, message to stderr):
-`error: invalid-argument: --json and --table are mutually exclusive`
+(exit 1).
 
 ---
 
@@ -69,51 +67,20 @@ One positional argument. No subcommands.
 
 ## Projection Mode
 
-### Error Format
+### Error Display
 
-All errors written to stderr follow this format:
-
-```
-<severity>: <type>: <variable-message>
-```
-
-- **severity** — `error` for all fatal conditions in MVP.
-- **type** — a short kebab-case noun identifying the error class (see table below).
-- **variable-message** — for system errors (I/O, permissions, path not found),
-  this is the OS-level error message verbatim. For validation errors, it is a
-  structured description defined per error class.
-
-| Type | Variable message |
-|---|---|
-| `invalid-argument` | Human-readable description of the argument conflict |
-| `system-error` | OS error message (e.g., `No such file or directory`, `Permission denied`) |
-| `invalid-plan` | `not a valid plan store: <path>` |
-| `invalid-plan` | `plan has no members` or `plan has no accounts` |
-| `invalid-plan` | `S:<assumption-path>` (one line per missing field) |
-| `invalid-plan` | `allocation sums to <N>% in year <Y>` (one line per violation) |
+The CLI does not define error types, codes, or messages. All errors originate
+from `ModelError` and follow the format defined in
+[design/error-handling.md](../error-handling.md). The CLI writes each
+`ModelError`'s formatted string to stderr verbatim and exits 1.
 
 ### Validation
 
-Before running the projection, the CLI validates:
-
-1. **Directory exists** — if `<dir>` does not exist, exit 1:
-   `error: system-error: No such file or directory (os error 2)`.
-   If the directory exists but is not a valid plan store, exit 1:
-   `error: invalid-plan: not a valid plan store: <path>`.
-2. **No members or no accounts** — a plan with no members or no accounts is
-   invalid; exit 1 with one of:
-   `error: invalid-plan: plan has no members`
-   `error: invalid-plan: plan has no accounts`
-3. **Required assumptions present** — all assumption fields with no shipped
-   default must be populated. Missing fields cause exit 1; one line per missing
-   field on stderr:
-   `error: invalid-plan: S:assumptions / inflation / cpi`
-4. **Allocations sum to 100%** — all allocation streams must sum to exactly 100%
-   for every active year. Any year in violation causes exit 1; one line per
-   violation on stderr:
-   `error: invalid-plan: allocation sums to <N>% in year <Y>`
-
-Validation failures are reported to stderr; stdout receives nothing.
+Validation is performed by `Model::load()`, not by the CLI. The CLI calls
+`load()` and, on failure, writes the returned `ModelError` to stderr. The
+validation checks — directory existence, plan structure, required assumptions,
+allocation sums — are defined in the Model and DB layers. The CLI does not
+duplicate or reinterpret them.
 
 ### Denomination
 
@@ -128,21 +95,43 @@ streams**. The first column is a row label; subsequent columns are one per
 projection year in ascending order.
 
 Row labels use user-defined names from the plan: `Member.given_name` for members,
-`Account.label` for accounts.
+`Account.label` for accounts, `Property.label` / `Vehicle.label` for hard assets,
+and liability entity labels for liabilities. Values containing commas are rejected
+at plan validation as `invalid-plan` errors — row labels must be safe for CSV
+output without quoting.
+
+Rows are emitted in **leaf-first tree order**: leaf streams appear before the
+aggregate that sums them. The reader sees detail rows first, then the summary
+row they feed into, mirroring the projection tree hierarchy bottom-up.
 
 Rows emitted, in order:
 
 | Row label | Content |
 |-----------|---------|
 | `age.<given_name>` | Age of the member in that year (one row per member) |
-| `bal.<label>` | End-of-year account balance (one row per account) |
+| `bal.<label>` | End-of-year account balance (one row per retirement account) |
+| `agg.retirement` | Retirement aggregate (sum of 401k, Roth 401k, IRA, Roth IRA) |
+| `bal.<label>` | End-of-year account balance (one row per HSA) |
+| `agg.health` | Health aggregate (sum of HSA) |
+| `bal.<label>` | End-of-year account balance (one row per bank/brokerage) |
+| `agg.taxable` | Taxable aggregate (sum of bank and brokerage) |
+| `val.<label>` | End-of-year hard asset value (one row per property or vehicle) |
+| `agg.hard-assets` | Hard assets aggregate (sum of properties and vehicles) |
+| `agg.assets` | Total assets (retirement + health + taxable + hard-assets) |
+| `lia.<label>` | End-of-year balance (one row per amortized or interest-only loan) |
+| `agg.lt-liabilities` | Long-term liabilities aggregate (amortized + interest-only loans) |
+| `lia.<label>` | End-of-year balance (one row per credit line) |
+| `agg.st-liabilities` | Short-term liabilities aggregate (credit lines) |
+| `agg.liabilities` | Total liabilities (long-term + short-term) |
+| `agg.net-worth` | Net worth (assets minus liabilities) |
 
 ### CSV Output (default)
 
 RFC 4180 CSV written to stdout. First row is a header: `stream,<year>,<year>,...`.
 One data row per stream. No quoting unless a field contains a comma. Monetary
 values are bare numbers rounded to two decimal places — no currency symbols.
-Age values are integers.
+Age values are integers. For years in which a stream is inactive or depleted,
+the cell is empty (no value between the surrounding commas).
 
 ### Table Output (`--table`)
 
@@ -153,19 +142,23 @@ Layout rules:
   (including the header), with a minimum of 4 characters for value columns
   (the width of a 4-digit year header).
 - Columns are separated by two spaces.
-- The label column is left-aligned. All value columns are left-aligned.
+- The label column is left-aligned. All value columns are right-aligned.
 - The header row is followed by a separator row of `-` characters, one `-`
   per character position across the full row width (including inter-column spacing).
 - No border characters on the left or right edges.
 - No trailing whitespace on any line.
+- Monetary values are bare numbers rounded to two decimal places — no currency
+  symbols. Age values are integers. Same formatting rules as CSV.
+- For years in which a stream is inactive or depleted, the cell is blank
+  (padded to column width with spaces).
 
 Example (illustrative widths only):
 
 ```
-stream               2025      2026      2027
--------------------------------------------
-age.Alice            45        46        47
-bal.401k             123456.78 130000.00 137000.00
+stream                   2025      2026      2027
+------------------------------------------------
+age.Alice                  45        46        47
+bal.401k            123456.78 130000.00 137000.00
 ```
 
 Intended for manual inspection; not suitable for programmatic parsing.
@@ -189,7 +182,8 @@ A single JSON object written to stdout:
 - `denomination` is always `"ynv"`. Each year's values are in that year's nominal dollars.
 - `years` lists the projection years in ascending order.
 - `rows` is an array of objects in the same row order as CSV. Each object has
-  a `stream` label and a `values` array parallel to `years`.
+  a `stream` label and a `values` array parallel to `years`. For years in which
+  a stream is inactive or depleted, the corresponding entry in `values` is `null`.
 - Monetary values are JSON numbers (not strings), rounded to two decimal places
   in output only; internal computation remains full-precision. No currency symbols.
 - Age values are JSON integers.
@@ -199,23 +193,27 @@ A single JSON object written to stdout:
 ## Generate Mode
 
 `--generate-plan <dir>` creates a minimal plan directory at the given path. The
-path must not already exist; all filesystem failures exit 1 with the OS error
-message verbatim using the `system-error` type (e.g.,
-`error: system-error: File exists (os error 17)`,
-`error: system-error: Permission denied (os error 13)`,
-`error: system-error: No such file or directory (os error 2)`).
+path must not already exist; filesystem failures are returned as `ModelError`
+and written to stderr by the CLI (exit 1).
 
 The generated plan contains:
 
-- One household member with `birth_year = current_year − 35`, `death_age = 90`,
-  `retirement_age = 65`.
-- One retirement lifecycle event for that member at `age = 65`.
-- One traditional 401k account with a starting balance.
-- One `Contribution401kEmployeeStream` with `start = MemberAge(M.id, age: 22)`
-  and `terminates = OnEvent(retirement_event_id)`.
-- One bank account with a starting balance.
-- One plan-level `AllocationStream` with a single anchor point: placeholder
-  percentages across large-cap, small-cap, international, and bonds summing to 100%.
+- Two household members:
+  - Alice (`role = Primary`): `given_name = "Alice"`, `birth_year = current_year − 35`,
+    `death_age = 90`, `retirement_age = 65`.
+  - Bob (`role = Spouse`): `given_name = "Bob"`, `birth_year = current_year − 33`,
+    `death_age = 90`, `retirement_age = 65`.
+- A spousal relationship between Alice and Bob.
+- One retirement lifecycle event per member at `age = 65`.
+- One traditional 401k account per member (`label = "Alice 401k"` and `label = "Bob 401k"`)
+  each with a starting balance.
+- One employee 401k contribution `DollarStream` per member (inputs key
+  `"employee-401k"` on the account balance stream) with
+  `start = MemberAge(M.id, age: 22)` and `terminates = OnEvent(retirement_event_id)`.
+- One joint bank account with `label = "Bank"` and a starting balance.
+- One plan-level set of allocation weight `RateStream`s (label=`"weight.<class>"`)
+  with a single anchor point each: placeholder percentages across large-cap,
+  small-cap, international, and bonds summing to 100%.
 - A full set of assumptions populated with placeholder values (CPI inflation rate,
   return rates for each asset class).
 
@@ -223,10 +221,18 @@ The generated plan contains:
 the current calendar year at generation time. All monetary placeholder values
 are YZV denominated in that `anchor_year`.
 
-After writing the plan files, the CLI runs projection-mode validation on the
-generated directory. If validation fails, the CLI exits 1 with the validation
-error on stderr. A successful `--generate-plan` run guarantees that
+After writing the plan files, the CLI runs `Model::load()` on the generated
+directory as a self-check. If validation fails, the CLI exits 1 with the
+`ModelError` on stderr. A successful `--generate-plan` run guarantees that
 `yarp-cli <dir>` exits 0 immediately afterward without user edits.
+
+On success, the CLI writes exactly one line to stdout:
+
+```
+Plan created in <dir>
+```
+
+where `<dir>` is the path argument supplied by the user.
 
 The generated files are in `JsonPlanStore` format — they are directly editable JSON.
 
