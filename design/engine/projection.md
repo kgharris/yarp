@@ -120,10 +120,12 @@ within a year; all other evaluation order is determined recursively by the
 The computed `age` and resolved `phase` are written to the memo table for year
 `y` so that downstream streams can read them via `eval`.
 
-`eval(stream_id, y)` is **memoized within a year**: each `(stream_id, year)` pair
-is computed at most once. When `eval` is called for a stream that has already
-been evaluated for year `y`, the cached value is returned immediately. The memo
-table is cleared between years.
+`eval(stream_id, y)` is **memoized**: each `(stream_id, year)` pair is computed
+at most once. When `eval` is called for a stream that has already been evaluated
+for year `y`, the cached value is returned immediately. The memo table persists
+across years — prior-year values must remain accessible for recurrence formulas
+(`memo[stream_id][y-1]`) and cumulative CPI products (`eval(cpi, t)` for
+`t < y`).
 
 ---
 
@@ -312,19 +314,20 @@ extra     = sum(convert(key, v, y) for key, v in input_vals
                 if key not in {"rate", "payment"})   -- denomination-aware per input
 
 if r_p = 0:
-    balance(y) = memo[stream_id][y-1] − pmt_p × k + extra
+    balance(y) = memo[stream_id][y-1] + pmt_p × k + extra
 else:
     balance(y) = memo[stream_id][y-1] × (1 + r_p)^k
-                 − pmt_p × ((1 + r_p)^k − 1) / r_p
+                 + pmt_p × ((1 + r_p)^k − 1) / r_p
                  + extra
 
 balance(y) = min(balance(y), 0.0)                        -- ceiling at zero
 ```
 
-The inner formula — `prior × (1 + r_p)^k − pmt_p × ((1 + r_p)^k − 1) / r_p`
-— is the exact remaining balance after `k` payments at per-period rate `r_p`,
-starting from `prior`. This is the standard annuity remaining-balance formula
-applied year-by-year rather than from inception.
+The inner formula adds the payment term because `balance` is negative (liability
+convention) and `pmt_p` is positive (payment toward the debt). Adding a positive
+payment term to a negative balance moves the balance toward zero. This is the
+standard annuity remaining-balance formula adapted for the negative-principal
+sign convention, applied year-by-year rather than from inception.
 
 `inputs["payment"]` is used as a nominal value (no YZV→YNV conversion) because
 a fixed-rate loan payment is contractually fixed in nominal dollars. Extra

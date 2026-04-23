@@ -299,10 +299,10 @@ StreamProcedure =
         --   pmt_p     = inputs["payment"]
         --   extra     = sum(v for key, v in inputs if key not in {"rate", "payment"})
         --   if r_p = 0:
-        --       balance(y) = balance(y-1) − pmt_p × k + extra
+        --       balance(y) = balance(y-1) + pmt_p × k + extra
         --   else:
         --       balance(y) = balance(y-1) × (1 + r_p)^k
-        --                    − pmt_p × ((1 + r_p)^k − 1) / r_p
+        --                    + pmt_p × ((1 + r_p)^k − 1) / r_p
         --                    + extra
         --
         -- Year-over-year recurrence: applies k payment periods of standard
@@ -521,13 +521,13 @@ only variation is ownership and what the rate represents in context:
 |---|---|---|---|
 | Account balance | effective rate root (`Additive`) | `Account(id)` | Composed from plan-level return rates and allocation weights |
 | Property value | appreciation rate | `Property(id)` | Entity's `appreciation_rate` scalar → single-point `Stored` `RateStream` |
-| Vehicle value | depreciation rate | `Vehicle(id)` | Plan-level vehicle depreciation `RateStream` (negative value) |
+| Vehicle value | depreciation rate | `Vehicle(id)` | Entity's `depreciation_rate` scalar → single-point `Stored` `RateStream` (negative value) |
 | Amortized loan | interest rate | `Liability(id)` | Entity's `interest_rate` scalar → single-point `Stored` `RateStream` |
 | Interest-only loan | interest rate | `Liability(id)` | Entity's `interest_rate` scalar → single-point `Stored` `RateStream` |
 | Credit line | interest rate | `Liability(id)` | Entity's `interest_rate` scalar → single-point `Stored` `RateStream` |
 
-For entities that carry an `interest_rate` scalar (all three liability types,
-properties), the scalar is realized at plan construction as a `Stored`
+For entities that carry a rate scalar (all three liability types, properties,
+vehicles), the scalar is realized at plan construction as a `Stored`
 `RateStream` owned by the entity, with a single `StreamPoint` at `start_year`.
 The `DollarStream`'s `inputs["rate"]` references this stream by ID. Variable
 rates are modeled by adding additional `StreamPoint`s to the same stream —
@@ -748,16 +748,27 @@ DollarStream for property P (value):
 
 ```
 Vehicle {
-    id:               Uuid,
-    plan_id:          Uuid,
-    label:            string,
-    purchase_year:    i32,
-    disposal_year:    Option<i32>,
-    value_yzv:        Decimal,      -- [YZV] estimated value at purchase_year
+    id:                Uuid,
+    plan_id:           Uuid,
+    label:             string,
+    purchase_year:     i32,
+    disposal_year:     Option<i32>,
+    value_yzv:         Decimal,      -- [YZV] estimated value at purchase_year
+    depreciation_rate: Decimal,      -- dimensionless; annual depreciation rate (negative, e.g. -0.15)
 }
 ```
 
 ```
+RateStream for vehicle V (depreciation rate):
+    kind         = RateStream
+    owner        = Vehicle(V.id)
+    start        = CalendarYear(V.purchase_year)
+    procedure    = Stored
+    inputs       = {}
+    value_schema = AttributeMap([{ key: "value", unit: Rate }])
+    -- Single StreamPoint at purchase_year with Vehicle.depreciation_rate.
+    -- Additional points model rate changes over time.
+
 DollarStream for vehicle V (value):
     kind         = DollarStream
     label        = "balance"
@@ -765,9 +776,7 @@ DollarStream for vehicle V (value):
     start        = CalendarYear(V.purchase_year)
     -- end derived from Vehicle.disposal_year per stream lifecycle rule 3
     procedure    = EndOfYearGrowth
-    inputs       = { "rate": vehicle_depreciation_stream_id }
-    -- vehicle_depreciation_stream_id: plan-level ReturnRate RateStream (negative value
-    --   for depreciation); see Assumption Streams § Return Rate.
+    inputs       = { "rate": depreciation_rate_stream_id }
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YZV] seed; projected YNV per year
 ```
 
