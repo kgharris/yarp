@@ -10,14 +10,33 @@ results as individual markdown files in `./reviews/`.
 
 Provide:
 - **phase**: `requirements`, `design`, `implementation`, or `testing`
+- **sub-phase** (implementation only): `detailed-design`, `plan`, or `code`
 - **scope** (optional):
   - Omitted → derived from `git diff main`
   - `"full"` → all assigned artifacts in full
 
-If phase is missing, prompt before proceeding.
+If phase is missing, prompt before proceeding. If phase is `implementation`
+and sub-phase is missing, prompt before proceeding.
 
-**Slug** = phase name, lowercased.
+**Slug** = `<phase>` for non-implementation phases, or
+`<phase>-<sub-phase>` for implementation (e.g., `implementation-detailed-design`).
 **Iteration** = highest N in `reviews/summary-<slug>-*.md` + 1, or 1.
+
+### Implementation Sub-Phases
+
+The implementation phase has three distinct sub-phases, each reviewing
+different artifacts against a different baseline:
+
+| Sub-phase | Artifacts under review | Compared against | Key question |
+|-----------|----------------------|------------------|--------------|
+| `detailed-design` | `implementation/<component>/detailed-design.md` | `design/` docs | Does the detailed design correctly realize the design? |
+| `plan` | `implementation/<component>/plan.md` | `implementation/<component>/detailed-design.md` | Are file specs complete, tests specified, dependencies correct? |
+| `code` | Source files in `src/` | `implementation/<component>/plan.md` | Does the code satisfy the plan's specifications and acceptance criteria? |
+
+The sub-phase determines what agents are told to review and what counts as a
+finding. Context assembly uses `phase = implementation` for all three —
+the same principles and personality focus apply. The sub-phase is
+additional routing provided by the orchestrator in the agent prompt.
 
 ## Scope Generation
 

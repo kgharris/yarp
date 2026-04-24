@@ -31,18 +31,23 @@ When asked to "run a review" or "run a full review", execute under the
 
 Derive parameters from natural language:
 
-| Phrase                          | phase          | scope  |
-|---------------------------------|----------------|--------|
-| "full requirements review"      | requirements   | full   |
-| "requirements review"           | requirements   | (diff) |
-| "full design review"            | design         | full   |
-| "design review"                 | design         | (diff) |
-| "full implementation review"    | implementation | full   |
-| "implementation review"         | implementation | (diff) |
-| "full testing review"           | testing        | full   |
-| "testing review"                | testing        | (diff) |
+| Phrase                                    | phase          | sub-phase       | scope  |
+|-------------------------------------------|----------------|-----------------|--------|
+| "full requirements review"                | requirements   |                 | full   |
+| "requirements review"                     | requirements   |                 | (diff) |
+| "full design review"                      | design         |                 | full   |
+| "design review"                           | design         |                 | (diff) |
+| "full detailed design review"             | implementation | detailed-design | full   |
+| "detailed design review"                  | implementation | detailed-design | (diff) |
+| "full implementation plan review"         | implementation | plan            | full   |
+| "implementation plan review"              | implementation | plan            | (diff) |
+| "full implementation review" / "full code review" | implementation | code    | full   |
+| "implementation review" / "code review"   | implementation | code            | (diff) |
+| "full testing review"                     | testing        |                 | full   |
+| "testing review"                          | testing        |                 | (diff) |
 
 If the phrase doesn't clearly specify a phase, ask before proceeding.
+If the phrase says "implementation" without specifying a sub-phase, ask.
 "Full" → `scope=full`. Otherwise scope is omitted (defaults to git diff).
 
 ## Swarm Commands
