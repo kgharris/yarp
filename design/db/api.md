@@ -20,9 +20,10 @@ PlanStore {
 
     /// Persist a plan to the given directory.
     ///
-    /// The directory must not already exist. Creates the directory and writes
-    /// all plan files. Returns Ok(()) on success. Any filesystem failure
-    /// returns a PlanStoreError::Io with the OS error.
+    /// If the directory does not exist, creates it. If it already exists,
+    /// overwrites plan files in place using atomic writes. Returns Ok(())
+    /// on success. Any filesystem failure returns a PlanStoreError::Io
+    /// with the OS error.
     save(dir: &Path, plan: &Plan) -> Result<(), PlanStoreError>
 }
 ```

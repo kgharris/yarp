@@ -57,7 +57,8 @@ yarp/
             vehicle.rs                # Vehicle
             liability.rs              # AmortizedLoan, InterestOnlyLoan, CreditLine, LiabilityKind
           owned_by.rs                 # OwnedBy enum
-          plan_graph.rs               # PlanGraph aggregate (distinct from Plan entity)
+          plan_graph.rs               # PlanGraph aggregate (serializable graph, distinct from Plan entity)
+          plan_context.rs             # PlanContext (PlanGraph + derived caches, e.g. CpiFactors)
           errors.rs                   # ModelError, PlanViolation
         store/
           mod.rs                      # PlanStore trait + re-exports
@@ -252,8 +253,8 @@ layout throughout.
 `lib.rs` re-exports the public API surface. Internal modules (`engine`, `store`)
 are `pub(crate)` — only `model.rs` and `types/` are `pub`. The library's public
 surface is intentionally narrow: `Model`, `ModelError`, `Projection`,
-`GeneratePlanParams`, `PlanGraph`, and the type definitions needed to construct
-and inspect them.
+`GeneratePlanParams`, `PlanContext`, `PlanGraph`, and the type definitions
+needed to construct and inspect them.
 
 ---
 
@@ -364,6 +365,88 @@ structure for readability.
 
 Catch `ModelError`, write its `Display` output to stderr, exit 1. No additional
 formatting — the Model layer owns the error format.
+
+---
+
+## Testing Strategy
+
+Test-driven development. Tests are written before the code they exercise.
+Every function, procedure, and integration point gets a test before its
+implementation. Integration tests are written before the glue code that
+makes integration possible.
+
+### Dependencies (dev-only)
+
+- `proptest` -- property-based testing for numerical invariants.
+- `cargo-llvm-cov` -- line and branch coverage measurement.
+
+### Coverage Requirements
+
+Unit tests must achieve 100% line coverage. Critical branches must also
+have branch-decision coverage (both arms exercised). Branch-decision
+coverage does not need to be exhaustive across all modules, but must cover
+the paths where a wrong branch produces silently incorrect results.
+
+### Data-Driven Golden-File Tests
+
+Test cases are data-driven. Each test case is a TOML config file that specifies
+inputs and points to an expected results file. The test runner:
+
+1. Reads the config file using its own parser (not `PlanStore::load()`)
+2. Constructs a `PlanGraph` from the specified inputs
+3. Runs the projection
+4. Compares output against the expected results file
+
+**The test framework must not use `PlanStore::load()` to read test inputs.**
+Using `load()` would make tests depend on the code under test. The test config
+format has its own parser -- deliberately simple, independent of the plan
+persistence layer.
+
+Expected values are hand-verified against manual calculations, not captured
+from code output. The canonical numerical example from
+[data-model.md](../design/data-model.md) ($10,000 seed, 6.4% rate, $1,000
+contribution, 3%/4% CPI -> $10,000, $11,670, $13,488.08) is the primary golden
+test.
+
+Test fixture layout:
+
+```
+crates/yarp-core/tests/
+  fixtures/
+    single-account-fixed-rate.toml      -- test config
+    single-account-fixed-rate.expected  -- expected results
+    canonical-example.toml
+    canonical-example.expected
+    amortized-loan-payoff.toml
+    amortized-loan-payoff.expected
+    ...
+```
+
+### PlanBuilder
+
+A test helper struct that constructs valid `PlanGraph` instances with sensible
+defaults. Methods like `.with_member(name, birth_year)`,
+`.with_account(label, kind, owner, opening_balance)`,
+`.with_contribution(label, member, account, amount)` chain to build up a plan.
+`.build()` returns a valid `PlanGraph`. Used in unit tests where a full
+data-driven fixture would be overkill.
+
+### Rejected: Snapshot Tests (insta)
+
+Automatic snapshot capture tools like `insta` are not used. Reasons:
+
+1. Snapshots capture what the code *does*, not what it *should do* -- a bug
+   present at capture time is locked in as the expected output.
+2. This project is pre-MVP and output formats will churn, causing constant
+   snapshot regeneration that becomes a rubber-stamp exercise.
+3. The value is redundant with hand-verified golden-file tests, which are
+   anchored to known-correct calculations.
+
+### Rounding Convention
+
+Carry full `Decimal` precision through all computation. Round to 2 decimal
+places only in `collect_projection_output` when building output
+`StreamPoint.entries`. All intermediate values are exact.
 
 ---
 
