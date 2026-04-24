@@ -51,12 +51,12 @@ StreamStart =
 **Why no explicit ends on streams:**
 
 Storing an explicit end year or end age on a stream creates a redundant fact
-that can drift out of sync with the entity data it is derived from. If the 401k
-contribution stream stored `end_age: M.retirement_age`, it would require
-updating whenever `Member.retirement_age` changes. With event-driven
-termination, there is one authoritative fact (the `LifecycleEvent.age`), one
-owner (the event entity), and every stream that references the event terminates
-at the same derived year automatically.
+that can drift out of sync with the data it is derived from. If a 401k
+contribution stream stored `end_age: 65`, it would require updating whenever
+the retirement age changes. With event-driven termination, there is one
+authoritative fact (the `LifecycleEvent.age`), one owner (the event entity),
+and every stream that references the event terminates at the same derived year
+automatically.
 
 ### Lifecycle Events
 
@@ -78,9 +78,9 @@ EventKind = Retirement | SocialSecurityClaiming | MedicareEligibility | Custom
 ```
 
 A `LifecycleEvent` with `kind = Retirement` fires at `member.birth_year +
-member.retirement_age`. Its `age` field holds the retirement age directly —
-changing `retirement_age` on the member means creating or updating the event,
-which then cascades to all streams that reference it.
+event.age`. The event is the sole authoritative source for the retirement age —
+changing it updates one record, and all streams that reference the event
+terminate at the new derived year automatically.
 
 Streams that terminate at a `LifecycleEvent` set their `terminates` field to
 `OnEvent { event_id }`. Streams that run until the member's natural death do
@@ -107,7 +107,19 @@ Stream {
     procedure:    StreamProcedure,         -- computation functor; see Stream Kind Registry
     value_schema: ValueSchema,
 }
+
+StreamTemplate = Stream   -- type alias
 ```
+
+A `StreamTemplate` is structurally identical to a `Stream`. The alias
+distinguishes the role: a `StreamTemplate` defines a computation (procedure,
+inputs, seed point) that *produces* a `Stream` when evaluated by the projection
+engine. It does not itself carry year-indexed values — it carries a seed
+`StreamPoint` and the wiring that tells the engine how to project forward.
+Account balance definitions, property value definitions, and liability balance
+definitions are `StreamTemplate`s. Rate streams, contribution streams, and
+allocation weight streams are `Stream`s — they carry stored points across
+multiple years and are consumed directly during evaluation.
 
 **Field notes:**
 
@@ -309,7 +321,7 @@ StreamProcedure =
         -- amortization to the prior year-end balance, then adds any extra
         -- cash flows (prepayments, extra principal).
         --
-        -- Base case: balance(opening_year) = seed (nominal principal, PNV).
+        -- Base case: balance(resolved_start) = seed (nominal principal, PNV).
         -- No YZV→YNV conversion — liability seeds are nominal dollars.
         -- balance(y-1) is this stream's own emitted value for the prior year.
         --
@@ -388,11 +400,11 @@ by `label`, `owner`, `inputs`, and `procedure` — not by the kind.
 StreamKind =
     | DollarStream          -- monetary values; stored YZV, projected YNV
     | RateStream            -- dimensionless; rates, weights, fractions
-    | MemberLifecycleStream -- member phase and age attributes (non-monetary, non-rate)
+    | MemberLifecycleStream -- member age attribute (non-monetary, non-rate)
     | RelationSpouseStream  -- spousal relationship marker
 ```
 
-All entity balance streams (accounts, hard assets, liabilities) are `DollarStream`.
+All entity balance templates (accounts, hard assets, liabilities) are `StreamTemplate` (alias for `Stream`).
 All assumption streams (CPI, return rates, allocation weights) are `RateStream`.
 Projection output streams are `DollarStream` (ephemeral; never persisted).
 
@@ -436,7 +448,7 @@ without schema changes. The following labels are used by convention in MVP:
 
 | Label | Kind | Used on |
 |-------|------|---------|
-| `"balance"` | `DollarStream` | Primary balance stream for an account, property, vehicle, or liability |
+| `"balance"` | `DollarStream` | Balance `StreamTemplate` (plan-side) or projection output `Stream` for an account, property, vehicle, or liability |
 | `"cpi"` | `RateStream` | Plan-level general inflation rate; universal YZV→YNV reference |
 | `"return.<class>"` | `RateStream` | Return rate for an asset class (e.g., `"return.large-cap"`, `"return.bonds"`) |
 | `"weight.<class>"` | `RateStream` | Allocation weight for an asset class (e.g., `"weight.large-cap"`) |
@@ -468,21 +480,22 @@ domain concept requires a new `StreamKind`; all variation is expressed through
 
 | Domain concept | Kind | Procedure | inputs |
 |---|---|---|---|
-| Account balance | `DollarStream` | `EndOfYearGrowth` | `{"rate": effective_rate_stream, "<label>": cash_flow_stream, ...}` |
-| Hard asset value (property, vehicle) | `DollarStream` | `EndOfYearGrowth` | `{"rate": rate_stream, "<label>": capital_improvement_stream, ...}` |
-| Credit line balance | `DollarStream` | `EndOfYearGrowth` | `{"rate": interest_rate_stream, "<label>": payment_stream, ...}` |
-| Amortized loan balance | `DollarStream` | `AmortizedSchedule` | `{"rate": interest_rate_stream, "payment": payment_stream, "<label>": prepayment_stream, ...}` |
-| Interest-only loan balance | `DollarStream` | `InterestOnly` | `{"rate": interest_rate_stream}` |
+| Account balance (template) | `StreamTemplate` | `EndOfYearGrowth` | `{"rate": effective_rate_stream, "<label>": cash_flow_stream, ...}` |
+| Hard asset value (template) | `StreamTemplate` | `EndOfYearGrowth` | `{"rate": rate_stream, "<label>": capital_improvement_stream, ...}` |
+| Credit line balance (template) | `StreamTemplate` | `EndOfYearGrowth` | `{"rate": interest_rate_stream, "<label>": payment_stream, ...}` |
+| Amortized loan balance (template) | `StreamTemplate` | `AmortizedSchedule` | `{"rate": interest_rate_stream, "payment": payment_stream, "<label>": prepayment_stream, ...}` |
+| Interest-only loan balance (template) | `StreamTemplate` | `InterestOnly` | `{"rate": interest_rate_stream}` |
 | Cash flow (contribution, payment, withdrawal) | `DollarStream` | `Stored` | `{}` |
-| Projection output leaf (balance, value) | `DollarStream` | `EndOfYearGrowth` / `AmortizedSchedule` / `InterestOnly` | same as plan stream |
-| Projection aggregate | `DollarStream` | `Additive` | `{"label": child_stream, ...}` |
+| Aggregate rollup (template) | `StreamTemplate` | `Additive` | `{"<label>": child_template_or_stream, ...}` |
+| Projection output leaf (balance, value) | `DollarStream` | `EndOfYearGrowth` / `AmortizedSchedule` / `InterestOnly` | same as plan template |
+| Projection aggregate | `DollarStream` | `Additive` | mirrors plan aggregate template |
 | CPI / inflation rate | `RateStream` | `Stored` | `{}` |
 | Return rate for one asset class | `RateStream` | `Stored` | `{}` |
 | Allocation weight for one asset class | `RateStream` | `Stored` | `{}` |
 | Weighted return (weight × rate for one asset class) | `RateStream` | `Product` | `{"weight": allocation_weight, "rate": return_rate}` |
 | Effective rate for an account | `RateStream` | `Additive` | `{"<label>": weighted_return_stream, ...}` |
 | Fixed interest rate (liability-owned) | `RateStream` | `Stored` | `{}` |
-| Member lifecycle (age, phase) | `MemberLifecycleStream` | `Stored` | `{}` |
+| Member lifecycle (age) | `MemberLifecycleStream` | `Stored` | `{}` |
 | Spousal relationship | `RelationSpouseStream` | `Stored` | `{}` |
 
 **How the growth procedures cover all balance-like domain types:**
@@ -500,16 +513,16 @@ The procedure determines the formula; the sign of the seed and child values dete
 the direction.
 
 The domain difference is entirely in wiring:
-- An account balance (positive) uses `EndOfYearGrowth`; `inputs["rate"]` is the
+- An account balance template (positive) uses `EndOfYearGrowth`; `inputs["rate"]` is the
   effective-rate root; all other inputs are cash-flow `DollarStream`s.
-- A property or vehicle value (positive) uses `EndOfYearGrowth`; `inputs["rate"]`
+- A property or vehicle value template (positive) uses `EndOfYearGrowth`; `inputs["rate"]`
   is a return/depreciation `RateStream`; all other inputs are capital improvements.
-- A credit line (negative) uses `EndOfYearGrowth`; `inputs["rate"]` is the interest
+- A credit line template (negative) uses `EndOfYearGrowth`; `inputs["rate"]` is the interest
   rate; all other inputs are payment cash flows.
-- An amortized loan (negative) uses `AmortizedSchedule`; `inputs["rate"]` and
+- An amortized loan template (negative) uses `AmortizedSchedule`; `inputs["rate"]` and
   `inputs["payment"]` determine the base schedule; other inputs are prepayments
   or extra principal.
-- An interest-only loan (negative) uses `InterestOnly`; `inputs["rate"]` is the
+- An interest-only loan template (negative) uses `InterestOnly`; `inputs["rate"]` is the
   interest rate; no other inputs.
 
 **Rate wiring is uniform.** Every `DollarStream` that uses a growth procedure
@@ -597,14 +610,15 @@ Member {
     birth_year:     i32,             -- sole calendar anchor; all ages resolve through this
     death_age:      i32,             -- planning horizon end, expressed as age
     role:           MemberRole,
-    retirement_age: Option<i32>,     -- None if not applicable
 }
 ```
 
 `birth_year` is the member's single calendar anchor. Every derived calendar
-event — retirement — is computed as `birth_year + age`. Storing
-ages rather than calendar years means that correcting `birth_year` automatically
-shifts all downstream events.
+event is computed as `birth_year + age` via `LifecycleEvent`. Storing ages
+rather than calendar years means that correcting `birth_year` automatically
+shifts all downstream events. Retirement age is not a member field — it is a
+`LifecycleEvent` with `kind = Retirement`, the same mechanism used for Social
+Security claiming, Medicare eligibility, and custom milestones.
 
 No age-derived calendar year (i.e., `member.birth_year + age`) may be stored as
 a raw `start_year` or `end_year` on a stream record. Age-relative starts are
@@ -623,26 +637,17 @@ MemberLifecycleStream for member M:
     --   derived from Member.death_age
     value_schema = AttributeMap([
         { key: "age",   unit: Age   },   -- derived as y - birth_year each year (not carry-forward)
-        { key: "phase", unit: Count },   -- 0=working, 1=retired (carry-forward from stored points)
     ])
 ```
 
 The `age` attribute is a special case: it is computed as `y - member.birth_year`
 during Phase 3 step 1 resolution, not via the `Stored` procedure's carry-forward
-rule. The `phase` attribute uses standard carry-forward — it transitions from
-`working` to `retired` at `birth_year + retirement_age`. Consumers read both
-attributes from the stream; no branching on age in consumer code.
-
-**Plan-construction invariant:** `MemberLifecycleStream` must have an explicit
-anchor point at `age = 0` with `phase = 0` (working). This anchor is required;
-without it the carry-forward rule has no initial value and pre-retirement phase
-is undefined.
+rule.
 
 **Design invariant — resolution order:** `MemberLifecycleStream` streams are resolved
-before all streams that reference them (cash inflow streams, contribution bounds,
-health insurance phase transitions). This is a named engine contract: the
+before all streams that reference them. This is a named engine contract: the
 engine's projection pass resolves household lifecycle streams first in each year
-before evaluating any stream that depends on a member's phase or age attribute.
+before evaluating any stream that depends on a member's age attribute.
 
 **Member relation streams:**
 
@@ -668,37 +673,39 @@ Account {
     account_kind:    AccountKind,
     owner:           AccountOwner,
     label:           string,         -- user-assigned label (e.g., "Fidelity 401k")
-    opening_year:    i32,
     closing_year:    Option<i32>,
     coverage_type:   Option<HsaCoverageType>,  -- required when account_kind = Hsa; None for all other account kinds
 }
 ```
 
-### Account Balance Stream
+### Account Balance StreamTemplate
 
-Each account has exactly one `DollarStream` with `label = "balance"`. This stream
-is the root of all cash-flow child streams for the account.
+Each account has exactly one `StreamTemplate` with `label = "balance"`. This
+template defines the computation for projecting the account's balance forward.
+It carries a seed `StreamPoint` (the opening balance in YZV) and wires together
+the rate and contribution streams that feed the projection.
 
 ```
-DollarStream for account A (balance):
+StreamTemplate for account A (balance):
     kind         = DollarStream
     label        = "balance"
     owner        = Account(A.id)
-    start        = CalendarYear(A.opening_year)
+    start        = CalendarYear(<start_year>)
     -- end derived from Account.closing_year per stream lifecycle rule 3
     procedure    = EndOfYearGrowth
     inputs       = { "rate": effective_rate_stream_id, "<label>": contribution_stream_id, ... }
     -- "rate" is the account's effective-rate RateStream root.
     -- All other inputs are contribution DollarStreams for this account (one per active contribution type).
     -- EndOfYearGrowth treats every non-"rate" input as a net-flow contribution.
-    -- Stored seed balance is YZV. Projected output is an ephemeral DollarStream (label="balance").
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])
 ```
 
-**Denomination separation:** The account `DollarStream` (label=`"balance"`) holds
-user-entered seed values in `YZV`. The engine seeds projection from that value.
-Projected year-end balances are written by the engine to a separate ephemeral
-`DollarStream`. A single stream does not carry two denominations.
+**Denomination separation:** The `StreamTemplate` holds the user-entered seed
+balance (YZV or PNV depending on the entity type). The projection engine reads
+this seed, converts it to `YNV(resolved_start)` if needed, and produces an
+ephemeral projection `Stream` with year-over-year balances in `YNV`. The
+template and the projection output are distinct — a single record does not carry
+two denominations.
 
 ---
 
@@ -733,7 +740,7 @@ RateStream for property P (appreciation rate):
     -- Single StreamPoint at purchase_year with Property.appreciation_rate.
     -- Additional points model rate changes over time.
 
-DollarStream for property P (value):
+StreamTemplate for property P (value):
     kind         = DollarStream
     label        = "balance"
     owner        = Property(P.id)
@@ -769,7 +776,7 @@ RateStream for vehicle V (depreciation rate):
     -- Single StreamPoint at purchase_year with Vehicle.depreciation_rate.
     -- Additional points model rate changes over time.
 
-DollarStream for vehicle V (value):
+StreamTemplate for vehicle V (value):
     kind         = DollarStream
     label        = "balance"
     owner        = Vehicle(V.id)
@@ -804,7 +811,7 @@ DollarStream for member M on account A (Employee401k):
     owner        = MemberAccount(M.id, A.id)
     start        = MemberAge(M.id, age: <employment_start_age>)
     terminates   = OnEvent(retirement_event_id)
-    -- retirement_event_id references LifecycleEvent { kind: Retirement, age: M.retirement_age }
+    -- retirement_event_id references LifecycleEvent { kind: Retirement }
     procedure    = Stored
     inputs       = {}
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])
@@ -957,7 +964,7 @@ DollarStream (Bank or Brokerage):
     kind         = DollarStream
     label        = "bank" | "brokerage"
     owner        = MemberAccount(M.id, A.id) | JointAccount(A.id)
-    start        = CalendarYear(account.opening_year)
+    start        = CalendarYear(<start_year>)
     terminates   = None
     procedure    = Stored
     inputs       = {}
@@ -1006,7 +1013,7 @@ RateStream for AmortizedLoan (interest rate):
     -- Single StreamPoint at start_year with AmortizedLoan.interest_rate.
     -- Additional points model rate changes (ARM, refinance).
 
-DollarStream for AmortizedLoan (balance):
+StreamTemplate for AmortizedLoan (balance):
     kind         = DollarStream
     label        = "balance"
     owner        = Liability(AmortizedLoan.id)
@@ -1044,7 +1051,7 @@ RateStream for InterestOnlyLoan (interest rate):
     value_schema = AttributeMap([{ key: "value", unit: Rate }])
     -- Single StreamPoint at start_year with InterestOnlyLoan.interest_rate.
 
-DollarStream for InterestOnlyLoan (balance):
+StreamTemplate for InterestOnlyLoan (balance):
     kind         = DollarStream
     label        = "balance"
     owner        = Liability(InterestOnlyLoan.id)
@@ -1081,7 +1088,7 @@ RateStream for CreditLine (interest rate):
     value_schema = AttributeMap([{ key: "value", unit: Rate }])
     -- Single StreamPoint at start_year with CreditLine.interest_rate.
 
-DollarStream for CreditLine (balance):
+StreamTemplate for CreditLine (balance):
     kind         = DollarStream
     label        = "balance"
     owner        = Liability(CreditLine.id)
@@ -1158,7 +1165,7 @@ weighted-return child:
 RateStream (effective rate root for account A):
     kind         = RateStream
     owner        = Account(A.id)   -- or Plan for a shared plan-level effective rate
-    start        = CalendarYear(A.opening_year)
+    start        = CalendarYear(<start_year>)
     procedure    = Additive
     inputs       = { "<asset-class-label>": weighted_return_stream_id, ... }
     -- one entry per asset class; labels are user-assigned (e.g. "large-cap", "bonds")
@@ -1172,7 +1179,7 @@ RateStream (WeightedReturn for one asset class):
     value_schema = AttributeMap([{ key: "value", unit: Rate }])
 ```
 
-The account's balance `DollarStream` references the effective rate root via
+The account's balance `StreamTemplate` references the effective rate root via
 `inputs["rate"]`. Adding a new asset class means creating a new weighted-return
 stream and adding it as a named entry to the effective rate root's `inputs` — no
 schema change.
@@ -1185,73 +1192,93 @@ schema change.
 
 ---
 
-## Projection Output Streams
+## Aggregate StreamTemplates
 
-The projection engine constructs an ephemeral tree of `DollarStream` records. All
-output stream points carry denomination `YNV(point.year)`. Output streams are never
-persisted. They are identified by `label` and navigated by `inputs` top-down.
+Aggregate `StreamTemplate`s define the rollup structure of the plan — which
+balance templates roll up into which groupings. They use `procedure = Additive`
+and their `inputs` map wires the children. The aggregate tree structure is plan
+data, not engine logic. The `generate()` function creates the default aggregate
+templates; users (and future plan-creation tools) may reorganize, add, or remove
+aggregates by editing these templates. The engine does not classify accounts into
+buckets — it reads the aggregate templates from the plan and evaluates them
+uniformly.
 
-**The projection tree is a forest of `Additive` and growth-procedure nodes.**
-Every node is a plain `DollarStream`. There are no special aggregate types — an
-aggregate is simply an `Additive` stream whose `inputs` are other streams. This
-extends to user-defined aggregates: any `Additive` `DollarStream` wired to
-whatever child streams the user chooses is a valid aggregate node.
+There are no special aggregate types — an aggregate is simply an `Additive`
+`StreamTemplate` whose `inputs` reference other streams. This extends to
+user-defined aggregates: any `Additive` `StreamTemplate` wired to whatever child
+streams the user chooses is a valid aggregate node.
 
-The default MVP tree structure:
+The default MVP aggregate tree (created by `generate()`):
 
 ```
-"net-worth" (Additive)
-    inputs = { "assets": assets_stream, "liabilities": liabilities_stream }
+"net-worth" (Additive, owner = Plan)
+    inputs = { "assets": assets_template, "liabilities": liabilities_template }
 
-  "assets" (Additive)
-      inputs = { "retirement": retirement_stream, "health": health_stream,
-                 "taxable": taxable_stream, "hard-assets": hard_assets_stream }
+  "assets" (Additive, owner = Plan)
+      inputs = { "retirement": retirement_template, "health": health_template,
+                 "taxable": taxable_template, "hard-assets": hard_assets_template }
 
-    "retirement" (Additive)
+    "retirement" (Additive, owner = Plan)
         inputs = { "<account-label>": ..., ... }   -- 401k, Roth 401k, IRA, Roth IRA
 
-    "health" (Additive)
+    "health" (Additive, owner = Plan)
         inputs = { "<account-label>": ... }   -- HSA
 
-    "taxable" (Additive)
+    "taxable" (Additive, owner = Plan)
         inputs = { "<account-label>": ..., ... }   -- bank, brokerage
 
-    "hard-assets" (Additive)
+    "hard-assets" (Additive, owner = Plan)
         inputs = { "<entity-label>": ..., ... }   -- properties, vehicles
 
-  "liabilities" (Additive)
-      inputs = { "lt-liabilities": lt_stream, "st-liabilities": st_stream }
+  "liabilities" (Additive, owner = Plan)
+      inputs = { "lt-liabilities": lt_template, "st-liabilities": st_template }
 
-    "lt-liabilities" (Additive)
+    "lt-liabilities" (Additive, owner = Plan)
         inputs = { "<entity-label>": ..., ... }   -- AmortizedLoan, InterestOnlyLoan
 
-    "st-liabilities" (Additive)
+    "st-liabilities" (Additive, owner = Plan)
         inputs = { "<entity-label>": ..., ... }   -- CreditLine
 ```
 
-The leaves are the per-entity projection streams:
+The leaf `inputs` in aggregate templates reference balance `StreamTemplate` IDs.
+The labels (`"net-worth"`, `"retirement"`, etc.) identify aggregates for CLI
+navigation.
+
+---
+
+## Projection Output Streams
+
+The projection engine creates an ephemeral `Stream` for every `StreamTemplate`
+in the plan — both balance templates and aggregate templates. The projection
+tree mirrors the plan's template structure. All output stream points carry
+denomination `YNV(point.year)`. Output streams are never persisted. They are
+identified by `label` and navigated by `inputs` top-down.
+
+Each projection leaf is a `Stream` created from the corresponding balance
+`StreamTemplate` — it carries the template's `procedure`, `inputs`, and `owner`,
+and produces `YNV(point.year)` output:
 
 ```
-DollarStream (one per account):
+Stream (one per account, from account StreamTemplate):
     kind         = DollarStream
     label        = "balance"
     owner        = Account(account_id)
     procedure    = EndOfYearGrowth
     inputs       = { "rate": effective_rate_stream_id, "<label>": contribution_stream_id, ... }
-    -- same inputs as the plan's balance stream for this account
+    -- inputs from the plan's StreamTemplate for this account
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YNV(point.year)] end-of-year balance
 
-DollarStream (one per property or vehicle):
+Stream (one per property or vehicle, from entity StreamTemplate):
     kind         = DollarStream
     label        = "balance"
     owner        = Property(property_id) | Vehicle(vehicle_id)
     procedure    = EndOfYearGrowth
     inputs       = { "rate": rate_stream_id, "<label>": capital_improvement_stream_id, ... }
-    -- same inputs as the plan's balance stream for this entity
+    -- inputs from the plan's StreamTemplate for this entity
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YNV(point.year)]
 
 -- Projection leaf for a CreditLine:
-DollarStream:
+Stream:
     kind         = DollarStream
     label        = "balance"
     owner        = Liability(credit_line_id)
@@ -1261,18 +1288,18 @@ DollarStream:
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YNV(point.year)]
 
 -- Projection leaf for an AmortizedLoan:
-DollarStream:
+Stream:
     kind         = DollarStream
     label        = "balance"
     owner        = Liability(amortized_loan_id)
     procedure    = AmortizedSchedule { cpi_stream_id, periods_per_year }
     inputs       = { "rate": interest_rate_stream_id, "payment": payment_stream_id, "<label>": prepayment_stream_id, ... }
-    --   same inputs as the plan's balance stream for this loan
+    --   inputs from the plan's StreamTemplate for this loan
     --   seed value (P) is negative; recurrence derives remaining balance per year
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YNV(point.year)]
 
 -- Projection leaf for an InterestOnlyLoan:
-DollarStream:
+Stream:
     kind         = DollarStream
     label        = "balance"
     owner        = Liability(interest_only_loan_id)
@@ -1282,18 +1309,17 @@ DollarStream:
     value_schema = AttributeMap([{ key: "value", unit: Decimal }])   -- [YNV(point.year)]
 ```
 
-The intermediate and root aggregate nodes are `Additive` `DollarStream`s owned by
-the plan, wired as shown in the tree above. Their `label` values
-(`"net-worth"`, `"retirement"`, etc.) identify them for CLI navigation. The
-engine treats them all identically: `emit(y) = sum(v.emit(y) for v in inputs.values())`.
+Aggregate projection `Stream`s mirror the plan's aggregate `StreamTemplate`s.
+The engine evaluates them all identically:
+`emit(y) = sum(v.emit(y) for v in inputs.values())`.
 
 **Balance recurrence formula** (end-of-year convention per
 [D:formulas / balance-recurrence / end-of-year](../requirements/conceptual-model.md#d-formulas)):
 
-The recurrence is defined only for `y > opening_year`:
+The recurrence is defined only for `y > resolved_start`:
 
 ```
-p(y) = p(y-1) × (1 + rate(y)) + net_flow(y)     [y > opening_year]
+p(y) = p(y-1) × (1 + rate(y)) + net_flow(y)     [y > resolved_start]
 ```
 
 where:
@@ -1310,20 +1336,12 @@ effective_rate(y) = Σ( allocation_weight(c, y) × return_rate(c, y) )   for eac
 This is the `Additive` sum over `WeightedReturn` inputs, where each entry emits
 `allocation_weight.emit(y) × return_rate.emit(y)` via `Product`.
 
-**Base case** — the recurrence is undefined at `opening_year`. The balance at
-`opening_year` is set directly from the user-entered opening balance stored in the
-account's `DollarStream`, converted from `YZV` to `YNV(opening_year)`:
+**Base case** — the recurrence is undefined at `resolved_start`. The balance at
+`resolved_start` is set from the seed `StreamPoint`. The seed's denomination
+determines the conversion:
 
-```
-p(opening_year) = seed_yzv × ∏(1 + r_inf(t))   for t = anchor_year, …, opening_year−1
-```
-
-where `r_inf(t)` is the value emitted by the plan's designated inflation
-`RateStream` for year `t`, resolved using carry-forward semantics. In MVP this
-is the CPI stream; it is a stream reference — a parameter of the procedure —
-so that future streams such as CPI-W can be substituted without changing the
-procedure. If `opening_year == anchor_year`, the product is empty and
-`p(opening_year) = seed_yzv`.
+- `YZV` seed: `p(resolved_start) = seed × cpi_factors[resolved_start]`
+- `PNV(ref_year)` seed: `p(resolved_start) = seed` (already nominal)
 
 **Balance bound.** After applying the recurrence, the result is clamped toward
 zero based on the stream's owner type:
@@ -1343,8 +1361,8 @@ money. The same ceiling applies to `AmortizedSchedule` streams.
 **End-to-end numerical example:**
 
 Inputs:
-- `anchor_year = 2025`, `opening_year = 2025`
-- `seed_yzv = $10,000` (opening balance in account DollarStream)
+- `anchor_year = 2025`, `resolved_start = 2025`
+- `seed = $10,000 [YZV]` (seed point in account StreamTemplate)
 - One contribution DollarStream in inputs: `$1,000 [YZV]` per year (procedure=Stored)
 - CPI RateStream (Stored): 3% in 2025, 4% in 2026
 - Two WeightedReturn inputs on the effective rate root:
@@ -1360,7 +1378,7 @@ effective_rate(y) = 0.60 × 0.08 + 0.40 × 0.04
                   = 0.064   (6.4%)
 ```
 
-Step 2 — base case. Since `opening_year == anchor_year`, the CPI product is empty:
+Step 2 — base case. Since `resolved_start == anchor_year`, the CPI factor is 1.0:
 
 ```
 p(2025) = $10,000   [YNV(2025)]
@@ -1424,38 +1442,26 @@ p(2027) = $11,670 × 1.064 + $1,071.20 = $13,488.08   [YNV(2027)]
 9. `MemberLifecycleStream` streams are resolved before all streams that reference
    them in each projection year. This is the canonical engine resolution order.
 
-10. Every `MemberLifecycleStream` must have an explicit anchor at `age = 0` with
-    `phase = 0`. This is a plan-construction requirement enforced at load time.
-
-11. A spousal relationship (`RelationSpouseStream`) requires exactly one other member
+10. A spousal relationship (`RelationSpouseStream`) requires exactly one other member
     with `MemberRole = Primary` or `MemberRole = Spouse` in the household. At
     most one spousal pair is permitted per plan.
 
-12. Account balance `DollarStream` records (label=`"balance"`) must have `start` year `>= account.opening_year`.
+11. A `StreamTemplate`'s `start` year must be `>=` the year of its seed
+    `StreamPoint`. The projection starts at `resolved_start`; the seed must
+    exist at or before that year for the base case to resolve.
 
-13. Every `AttributeDef` with a carry-forward unit (`Rate`, `Count`, `Years`,
+12. Every `AttributeDef` with a carry-forward unit (`Rate`, `Count`, `Years`,
     or `Age`) must have a non-`None` `initial` value. This is a plan-construction
     requirement enforced at load time. The `initial` value is the terminal
     fallback for carry-forward resolution and is not tied to any year.
 
-14. `Account.opening_year` must be `>= Plan.anchor_year`. The base case formula
-    `p(opening_year) = seed_yzv × ∏(1 + r_t)` requires a forward inflation
-    product from `anchor_year` to `opening_year`; accounts predating the anchor
-    year produce an invalid (backward) product range and are not supported in MVP.
-
-15. `Property.purchase_year` must be `>= Plan.anchor_year`. Same rationale as
-    invariant 14 — the `yzv_to_ynv` base case requires a forward inflation product.
-
-16. `Vehicle.purchase_year` must be `>= Plan.anchor_year`. Same rationale as
-    invariant 14.
-
-17. The pair `(stream_id, year)` is unique across all `StreamPoint` records. A
+13. The pair `(stream_id, year)` is unique across all `StreamPoint` records. A
     stream may have at most one point per year.
 
-18. The pair `(owner, label)` is unique across all `Stream` records within a
+14. The pair `(owner, label)` is unique across all `Stream` records within a
     plan. Two streams with the same owner may not share a label.
 
-19. Entity labels (`Account.label`, `Property.label`, `Vehicle.label`, and
+15. Entity labels (`Account.label`, `Property.label`, `Vehicle.label`, and
     liability entity labels) must be globally unique within a plan.
 
 ---
@@ -1525,19 +1531,19 @@ are included; FUT and unanchored paths are omitted.
 | `assumptions / allocations / [ account ]` | — | `RateStream` (label=`"weight.<class>"`, owner=JointAccount) |
 | `household / [ member ]` | `Member` | `MemberLifecycleStream` |
 | `household / [ member ] / relations / spouse` | — | `RelationSpouseStream` |
-| `assets / accounts / [ member ] / [ 401k ]` | `Account` (kind=Traditional401k) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ roth-401k ]` | `Account` (kind=Roth401k) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ ira ]` | `Account` (kind=TraditionalIra) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ roth-ira ]` | `Account` (kind=RothIra) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ hsa ]` | `Account` (kind=Hsa) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ bank ]` | `Account` (kind=Bank, owner=MemberOwned) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ brokerage ]` | `Account` (kind=Brokerage, owner=MemberOwned) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ bank ]` | `Account` (kind=JointBank, owner=JointOwned) | `DollarStream` (label=`"balance"`) |
-| `assets / accounts / [ brokerage ]` | `Account` (kind=JointBrokerage, owner=JointOwned) | `DollarStream` (label=`"balance"`) |
-| `assets / hard-assets / properties / [ home ]` | `Property` (kind=PrimaryResidence) | `DollarStream` (label=`"balance"`) |
-| `assets / hard-assets / properties / [ vacation-home ]` | `Property` (kind=VacationHome) | `DollarStream` (label=`"balance"`) |
-| `assets / hard-assets / properties / [ parcel ]` | `Property` (kind=LandParcel) | `DollarStream` (label=`"balance"`) |
-| `assets / hard-assets / [ vehicle ]` | `Vehicle` | `DollarStream` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ 401k ]` | `Account` (kind=Traditional401k) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ roth-401k ]` | `Account` (kind=Roth401k) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ ira ]` | `Account` (kind=TraditionalIra) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ roth-ira ]` | `Account` (kind=RothIra) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ hsa ]` | `Account` (kind=Hsa) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ bank ]` | `Account` (kind=Bank, owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ brokerage ]` | `Account` (kind=Brokerage, owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ bank ]` | `Account` (kind=JointBank, owner=JointOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ brokerage ]` | `Account` (kind=JointBrokerage, owner=JointOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / hard-assets / properties / [ home ]` | `Property` (kind=PrimaryResidence) | `StreamTemplate` (label=`"balance"`) |
+| `assets / hard-assets / properties / [ vacation-home ]` | `Property` (kind=VacationHome) | `StreamTemplate` (label=`"balance"`) |
+| `assets / hard-assets / properties / [ parcel ]` | `Property` (kind=LandParcel) | `StreamTemplate` (label=`"balance"`) |
+| `assets / hard-assets / [ vehicle ]` | `Vehicle` | `StreamTemplate` (label=`"balance"`) |
 | `contributions / [ member ] / [ 401k ] / employee` | — | `DollarStream` (Stored, inputs key `"employee-401k"`) |
 | `contributions / [ member ] / [ 401k ] / employer` | — | `DollarStream` (Stored, inputs key `"employer-401k"`) |
 | `contributions / [ member ] / [ 401k ] / catchup` | — | `DollarStream` (Stored, inputs key `"catchup-401k"`) |
@@ -1555,6 +1561,6 @@ are included; FUT and unanchored paths are omitted.
 | `contributions / [ member ] / [ brokerage ]` | — | `DollarStream` (Stored, inputs key `"brokerage"`) |
 | `contributions / [ bank ]` | — | `DollarStream` (Stored, inputs key `"bank"`, owner=JointAccount) |
 | `contributions / [ brokerage ]` | — | `DollarStream` (Stored, inputs key `"brokerage"`, owner=JointAccount) |
-| `liabilities / [ amortized-loan ]` | `AmortizedLoan` | `DollarStream` (label=`"balance"`) |
-| `liabilities / [ interest-only-loan ]` | `InterestOnlyLoan` | `DollarStream` (label=`"balance"`) |
-| `liabilities / [ credit-line ]` | `CreditLine` | `DollarStream` (label=`"balance"`) |
+| `liabilities / [ amortized-loan ]` | `AmortizedLoan` | `StreamTemplate` (label=`"balance"`) |
+| `liabilities / [ interest-only-loan ]` | `InterestOnlyLoan` | `StreamTemplate` (label=`"balance"`) |
+| `liabilities / [ credit-line ]` | `CreditLine` | `StreamTemplate` (label=`"balance"`) |

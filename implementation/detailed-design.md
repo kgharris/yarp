@@ -1,0 +1,387 @@
+# Project Detailed Design
+
+This document covers project-wide implementation-level decisions: workspace
+layout, crate structure, dependencies, conventions, the CLI binary, and the
+build sequence. Component-specific detailed designs are in their respective
+directories:
+
+- [Engine detailed design](engine/detailed-design.md) — projection engine,
+  core types, procedures, evaluation, validation, generate
+
+---
+
+## Crate Structure
+
+A Cargo workspace with two crates: `yarp-core` (library) and `yarp-cli`
+(binary). No workspace split between engine and DB.
+
+The single-crate decision is not an MVP shortcut — it is architecturally
+correct for the full target system including the future Tauri desktop app.
+When the Tauri app ships, the workspace grows by one binary crate:
+
+```
+yarp-cli   → yarp-core
+yarp-tauri → yarp-core
+```
+
+Both binaries consume `yarp-core` through the same public API. The Controller
+layer (Tauri commands) lives in `yarp-tauri`, not in a separate library crate.
+The View is React/TypeScript, entirely outside Rust. No third Rust library crate
+needs the types independently — so a `yarp-types` crate has no consumer that
+`yarp-core` doesn't already serve. A `yarp-model` crate would extract 3 methods
+and force unnecessary indirection. Neither split earns its keep.
+
+### Workspace Layout
+
+```
+yarp/
+  Cargo.toml                          # workspace root
+  crates/
+    yarp-core/                        # library crate -- engine + db
+      Cargo.toml
+      src/
+        lib.rs                        # public API re-exports: Model, ModelError, Projection, etc.
+        types/
+          mod.rs                      # re-exports all type submodules
+          ids.rs                      # YARP_NAMESPACE, UUID v5 derivation functions
+          denomination.rs             # PointDenomination, ValueUnit
+          stream.rs                   # Stream, StreamTemplate, StreamKind, StreamStart, TerminationRef, ValueSchema, AttributeDef
+          procedure.rs                # StreamProcedure enum (type definition only, not dispatch logic)
+          point.rs                    # StreamPoint, PointEntry
+          entities/
+            mod.rs                    # re-exports all entity submodules
+            plan.rs                   # Plan, Household
+            member.rs                 # Member, MemberRole, LifecycleEvent, EventKind
+            account.rs                # Account, AccountKind, AccountOwner, HsaCoverageType, FilingStatus
+            property.rs               # Property, PropertyKind
+            vehicle.rs                # Vehicle
+            liability.rs              # AmortizedLoan, InterestOnlyLoan, CreditLine, LiabilityKind
+          owned_by.rs                 # OwnedBy enum
+          plan_graph.rs               # PlanGraph aggregate (distinct from Plan entity)
+          errors.rs                   # ModelError, PlanViolation
+        store/
+          mod.rs                      # PlanStore trait + re-exports
+          memory.rs                   # MemoryPlanStore (test backend)
+          json.rs                     # JsonPlanStore (production backend)
+        engine/
+          mod.rs                      # re-exports; no public surface beyond Model
+          timeline.rs                 # Phase 1: timeline derivation
+          tree.rs                     # Phase 2: projection tree construction
+          eval.rs                     # Phase 3: eval(), sweep loop, MemoTable
+          procedures/
+            mod.rs                    # dispatch() function
+            stored.rs                 # Stored procedure
+            additive.rs               # Additive procedure
+            product.rs                # Product procedure
+            end_of_year_growth.rs     # EndOfYearGrowth base case + recurrence
+            amortized_schedule.rs     # AmortizedSchedule base case + recurrence
+            interest_only.rs          # InterestOnly procedure
+          convert.rs                  # yzv_to_ynv, convert_input_to_ynv
+          lifecycle.rs                # MemberLifecycleStream resolution
+          resolve.rs                  # resolved_start, resolved_end, identity_value
+          stored_point.rs             # stored_point_value, cursor logic
+          validate/
+            mod.rs                    # top-level validate() that runs all checks
+            denomination.rs           # checks 1, 2
+            allocation.rs             # check 4
+            members.rs                # checks 5, 6, 10
+            streams.rs                # checks 7, 8, 11, 13, 14
+            carry_forward.rs          # check 12
+            labels.rs                 # check 15
+            structural.rs             # has_members, has_accounts, cpi_exists, input_refs, event_refs, required_slots, commas, effective_rate_tree
+          generate.rs                 # generate() pipeline
+        model.rs                      # Model<S: PlanStore> facade
+      tests/                            # integration tests (crate-external, use pub API only)
+        common/
+          mod.rs                      # shared test helpers: fixture loader, plan_builder, result comparator
+          plan_builder.rs             # PlanBuilder helper
+          fixture.rs                  # TOML fixture parser (independent of PlanStore)
+        projection_tests.rs           # data-driven golden-file tests for projection scenarios
+        validation_tests.rs           # invalid-plan fixtures exercising each validator
+        generate_tests.rs             # generate -> load -> validate -> project round-trip
+        cli_tests.rs                  # CLI output format verification (table, CSV, JSON)
+      tests/fixtures/                   # data-driven test cases
+        canonical-example.toml        # inputs for the data-model numerical example
+        canonical-example.expected    # hand-verified expected results
+        single-account-fixed-rate.toml
+        single-account-fixed-rate.expected
+        amortized-loan-payoff.toml
+        amortized-loan-payoff.expected
+        ...                           # one .toml + .expected pair per scenario
+    yarp-cli/                         # binary crate
+      Cargo.toml
+      src/
+        main.rs                       # clap arg parsing, mode dispatch, output formatting
+```
+
+**Unit tests** live inline in each source module as `#[cfg(test)] mod tests`.
+Every source file in `src/` has a corresponding test module at the bottom.
+Unit tests exercise the module's functions directly, using `pub(crate)`
+visibility. They use `PlanBuilder` for constructing inputs where a full fixture
+would be overkill.
+
+**Integration tests** live in `crates/yarp-core/tests/`. These are
+crate-external — they can only access the `pub` API surface of `yarp-core`.
+Integration tests are data-driven: each test reads a TOML fixture file using
+the independent fixture parser (not `PlanStore::load()`), constructs a
+`PlanGraph`, runs the projection, and compares against the `.expected` file.
+
+**Shared test helpers** live in `tests/common/`. The fixture parser, the
+`PlanBuilder`, and the result comparison logic are shared across all integration
+test files. `tests/common/mod.rs` re-exports them.
+
+**Module granularity rationale.** Source modules are split to keep each file to
+a single focused responsibility with a proportionate inline test block. In
+particular: `entities/` is split by domain entity (member, account, property,
+vehicle, liability) rather than one monolithic file; `procedures/` has one file
+per procedure variant; `validate/` has one file per invariant group. Do not
+consolidate these into larger files — the inline unit test pattern depends on
+each file being small enough that the test block remains readable alongside the
+implementation.
+
+### Cargo.toml Files
+
+**Workspace root** (`yarp/Cargo.toml`):
+
+```toml
+[workspace]
+resolver = "2"
+members = ["crates/yarp-core", "crates/yarp-cli"]
+
+[workspace.dependencies]
+rust_decimal = "1"
+rust_decimal_macros = "1"
+uuid = { version = "1", features = ["v5"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+indexmap = { version = "2", features = ["serde"] }
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+```
+
+Shared dependencies are declared once at workspace level and inherited by member
+crates. This keeps versions consistent and avoids drift.
+
+**Library crate** (`crates/yarp-core/Cargo.toml`):
+
+```toml
+[package]
+name = "yarp-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+indexmap = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
+```
+
+**Binary crate** (`crates/yarp-cli/Cargo.toml`):
+
+```toml
+[package]
+name = "yarp-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "yarp-cli"
+path = "src/main.rs"
+
+[dependencies]
+yarp-core = { path = "../yarp-core" }
+clap = { workspace = true }
+```
+
+The binary is named `yarp-cli` to distinguish it from the future Tauri GUI
+application.
+
+### Module Dependency Rules
+
+These are acyclic and strictly enforced:
+
+- `types` is a leaf — no dependencies on other yarp-core modules.
+- `store` depends on `types` only.
+- `engine` depends on `types` only. It never imports from `store`.
+- `model` depends on `types`, `store`, and `engine` — it is the composition root.
+
+The `engine` module never touches persistence; the `store` module never touches
+computation. `Model` is the sole site where both are composed.
+
+### Visibility Rules
+
+The architectural boundary between engine, store, and the public API surface is
+enforced by visibility, not crate boundaries:
+
+- `types/` — `pub` (visible to all dependents)
+- `model.rs` — `pub` (the facade)
+- `engine/` — `pub(crate)` (invisible outside `yarp-core`)
+- `store/` — `pub(crate)` (invisible outside `yarp-core`)
+
+With this visibility, `yarp-cli` (or any future dependent like `yarp-tauri`)
+sees only `Model`, `ModelError`, `Projection`, `GeneratePlanParams`, and the
+type definitions. It cannot import `eval()`, `JsonPlanStore`, or any
+engine/store internal. The module boundary enforces the MVC contract at compile
+time — the same guarantee a crate boundary would provide, without the overhead.
+
+The one rule `pub(crate)` does not enforce is that `engine` never imports from
+`store`. That is a module dependency rule enforced by convention. If it is
+violated, splitting into separate crates is a mechanical refactor — extract
+`types/` into `yarp-types`, have `yarp-core` re-export it, dependents don't
+change.
+
+**When to revisit:** split into crates if (a) a third Rust library crate needs
+the types independently, (b) the engine module starts importing from store, or
+(c) compile times become a bottleneck. None of these are likely at MVP or Tauri
+phase.
+
+### Rust Idiom Notes
+
+Module directories use `mod.rs` files (e.g., `types/mod.rs`, `engine/mod.rs`).
+The alternative convention (`types.rs` alongside a `types/` directory) is also
+valid Rust but `mod.rs` is used here for consistency with the directory-based
+layout throughout.
+
+`lib.rs` re-exports the public API surface. Internal modules (`engine`, `store`)
+are `pub(crate)` — only `model.rs` and `types/` are `pub`. The library's public
+surface is intentionally narrow: `Model`, `ModelError`, `Projection`,
+`GeneratePlanParams`, `PlanGraph`, and the type definitions needed to construct
+and inspect them.
+
+---
+
+## Dependencies
+
+| Crate | Purpose |
+|-------|---------|
+| `rust_decimal` | Fixed 96-bit significand (28-29 significant digits). Sufficient for 40-year projections. Chosen over `bigdecimal` for performance; chosen over `f64` per [implementation principles](engine/principles.md) (no floating point for monetary values). |
+| `rust_decimal_macros` | `dec!()` macro for readable test literals (e.g., `dec!(10000)` instead of `Decimal::from(10000)`). |
+| `uuid` | UUID v5 (SHA-1 namespace) generation. The `v5` feature flag enables `Uuid::new_v5()`. |
+| `serde` / `serde_json` | Serialization for `JsonPlanStore`. All entity and stream types derive `Serialize`/`Deserialize`. |
+| `indexmap` | Insertion-order-preserving maps for `Stream.inputs`, `StreamPoint.entries`, and entity collections on `PlanGraph`. The `serde` feature enables serialization. |
+| `thiserror` | Derive `Error` + `Display` for `ModelError` and `PlanStoreError`. Reduces boilerplate. |
+| `clap` | CLI argument parsing (`yarp-cli` only). The `derive` feature enables declarative argument structs. |
+| `proptest` | (dev-only) Property-based testing for numerical invariants. |
+| `cargo-llvm-cov` | (dev tool) Line and branch coverage reporting. |
+
+---
+
+## PlanStore Trait
+
+```rust
+trait PlanStore {
+    fn load(&self, dir: &Path) -> Result<PlanGraph, PlanStoreError>;
+    fn save(&self, dir: &Path, plan: &PlanGraph) -> Result<(), PlanStoreError>;
+}
+```
+
+Two implementations:
+
+- `JsonPlanStore` — production backend. File layout and schema versioning are
+  DB-layer concerns, specified in [design/db/](../design/db/).
+- `MemoryPlanStore` — test backend. Holds a `PlanGraph` in memory, `save()`
+  clones, `load()` returns the clone.
+
+### PlanStoreError
+
+```rust
+#[derive(Debug, thiserror::Error)]
+enum PlanStoreError {
+    #[error("{0}")]
+    NotFound(PathBuf),
+
+    #[error("{0}")]
+    InvalidStore(PathBuf),
+
+    #[error("schema version {found}; expected {expected}")]
+    SchemaMismatch { found: String, expected: String },
+
+    #[error("{0:?}")]
+    InvalidPlan(Vec<PlanViolation>),
+
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+}
+```
+
+`ModelError` maps from `PlanStoreError` — each variant has a 1:1 mapping.
+`Model` converts at the facade boundary; callers above never see
+`PlanStoreError`. `SchemaVersion` is a `String`, not a `u32`.
+
+---
+
+## CLI Integration
+
+`yarp-cli` binary with `clap` derive for argument parsing. Three output
+formats: table (default), CSV, JSON.
+
+### Args
+
+```rust
+#[derive(clap::Parser)]
+struct Args {
+    /// Path to plan directory
+    path: PathBuf,
+
+    /// Output as CSV
+    #[arg(long, group = "format")]
+    csv: bool,
+
+    /// Output as JSON
+    #[arg(long, group = "format")]
+    json: bool,
+
+    /// Generate a new plan instead of projecting
+    #[arg(long)]
+    generate: bool,
+}
+```
+
+### Mode Dispatch
+
+- `--generate`: call `Model::generate(path, GeneratePlanParams { anchor_year: current_year })`,
+  print success message, exit 0.
+- Default (project): call `Model::load(path)`, then
+  `Model::get_projection(&plan)`. Format output per the selected format and
+  write to stdout.
+
+### Output Row Order
+
+Lifecycle rows first (one per member), then leaf balance rows (accounts,
+properties, vehicles, liabilities), then aggregate rows in tree order
+(retirement, health, taxable, hard-assets, assets, lt-liabilities,
+st-liabilities, liabilities, net-worth). This matches the projection tree's
+structure for readability.
+
+### Error Output
+
+Catch `ModelError`, write its `Display` output to stderr, exit 1. No additional
+formatting — the Model layer owns the error format.
+
+---
+
+## Build Sequence
+
+| Phase | What | Tests | Invariants |
+|-------|------|-------|------------|
+| M0 (Spike) | Standalone eval loop + BTreeMap MemoTable + Stored + EndOfYearGrowth with hard-coded types. No real entity types. Validate: recursion, memoization, Decimal precision, BTreeMap range scans. | 4 unit tests: memo hit, base case, 3-year recurrence, balance floor at zero. | — |
+| M1 | Core types (all entity structs, enums, Stream, StreamPoint, OwnedBy, ValueSchema). UUID v5 derivation. PlanGraph. | Type construction tests, UUID determinism tests. | — |
+| M2 | PlanStore trait, MemoryPlanStore, PlanBuilder (test helper). | Round-trip store tests. PlanBuilder smoke test. | — |
+| M3 | Denomination conversion. `compute_cpi_factors` (plan-load-time precomputation), `yzv_to_ynv` (table lookup), `convert_input_to_ynv`. | Unit tests: zero-value fast path, single-year factor, multi-year factor, PNV passthrough, factor table matches manual product. | — |
+| M4 | All six procedures with real types. `pow_decimal`. Balance bounds. | Per-procedure unit tests. The canonical numerical example ($10,000 seed, $1,000/yr, 3%/4% CPI, 6.4% rate → $10,000, $11,670, $13,488.08). Property-based tests (monotonicity, convergence). | — |
+| M5 | Timeline derivation. Projection tree construction. resolved_start/resolved_end/identity_value. | Tree construction tests. Resolved range tests for all OwnedBy variants. | — |
+| M6 | Eval sweep + output collection. Full end-to-end projection. | Golden-file tests. Integration test: single account, two members, contributions, 3-year projection matching the numerical example. | 3, 9 |
+| M7 | Validation (all 15 design invariants + structural checks). | Per-invariant unit tests (one test per validator). PlanBuilder constructs invalid plans to trigger each violation. | 1-2, 4-8, 10-15 |
+| M8 | JsonPlanStore + generate() pipeline + round-trip test. | Generate → load → validate → project end-to-end test. Self-check passes. | — |
+| M9 | CLI binary. Table/CSV/JSON formatting. Error output. | CLI integration tests: each output format, each error case. Golden-file comparison for output formatting. | — |
+
+The spike (M0) is explicitly throwaway for the types but the algorithm carries
+forward. Real types replace the hard-coded stubs in M1, and the eval function
+signature stabilizes in M4 when real procedures are wired.

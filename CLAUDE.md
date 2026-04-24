@@ -74,6 +74,20 @@ Derive parameters from natural language:
 - **scope** (optional): if the user specifies a directory or glob
   (e.g., "to design/ only"), pass it as the scope filter.
 
+## Implementation Plan Commands
+
+When asked to "create an implementation plan", "plan the implementation files",
+or "generate a file plan", execute under the
+[implementation-plan-orchestrator.md](ai/workflows/implementation-plan-orchestrator.md)
+workflow.
+
+Derive parameters from natural language:
+
+- **component**: the subsystem to plan (e.g., "plan the engine files",
+  "create a file plan for db")
+
+If component is unclear, ask before proceeding.
+
 ## Implementation Commands
 
 When asked to "implement" or "build from plan", execute under the
@@ -81,12 +95,26 @@ When asked to "implement" or "build from plan", execute under the
 workflow.
 
 - **implementation plan**: the path to a plan file. If the user names it
-  without a directory prefix, look in `.impl-plans/` (e.g., "implement
-  engine-timeline" → `.impl-plans/engine-timeline/plan.md`).
+  without a directory prefix, look in `implementation/` (e.g., "implement
+  engine" → `implementation/engine/plan.md`).
 - **scope** (optional): limit to a subset of files or components within
   the plan.
 
 If no plan is specified and no path can be inferred, ask before proceeding.
+
+## Detailed Design Commands
+
+When asked to "create a detailed design", "spec the implementation", "draft a
+detailed spec", or "run the detailed design process", execute under the
+[detailed-design-orchestrator.md](ai/workflows/detailed-design-orchestrator.md)
+workflow.
+
+Derive parameters from natural language:
+
+- **component**: the subsystem (e.g., "detailed design for the engine",
+  "create a db detailed design", "detailed design for the controller")
+
+If component is unclear, ask before proceeding.
 
 ## Task Commands
 

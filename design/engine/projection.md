@@ -49,7 +49,7 @@ stream tree. The tree structure is defined in
 The engine creates:
 
 - One `ProjectionAccountBalance` leaf stream per account in the plan, with
-  `inputs` copied from the plan's `AccountBalance` stream for that account.
+  `inputs` copied from the plan's `AccountBalance` `StreamTemplate` for that account.
   `inputs["rate"]` is the account's effective-rate `RateStream` root; all other
   inputs are the account's cash-flow `DollarStream`s.
 - One `ProjectionHardAssetValue` leaf stream per property and vehicle.
@@ -105,20 +105,16 @@ for y in timeline_start..=timeline_end:
 **Step 1** must precede step 2. Per
 [data-model.md Design Invariant 9](../data-model.md#design-invariants),
 `MemberLifecycleStream` values must be available before any stream that
-depends on member phase or age. This is the only fixed ordering constraint
-within a year; all other evaluation order is determined recursively by the
-`inputs` map.
+depends on member age. This is the only fixed ordering constraint within a
+year; all other evaluation order is determined recursively by the `inputs` map.
 
 **Step 1 resolution** does not use the standard `eval` path. For each
 `MemberLifecycleStream`, the engine computes:
 
 - `age = y - member.birth_year` (derived, not carried forward from stored points)
-- `phase` = carry-forward from the most recent `StreamPoint` at or before `y`
-  (standard carry-forward semantics; the anchor at age=0/phase=0 provides the
-  initial value)
 
-The computed `age` and resolved `phase` are written to the memo table for year
-`y` so that downstream streams can read them via `eval`.
+The computed `age` is written to the memo table for year `y` so that downstream
+streams can read it via `eval`.
 
 `eval(stream_id, y)` is **memoized**: each `(stream_id, year)` pair is computed
 at most once. When `eval` is called for a stream that has already been evaluated
@@ -223,20 +219,19 @@ and the net worth root. `stored` is unused. Input slot names are user-defined la
 
 The base case and the recurrence are handled separately.
 
-**Base case** — when `y == resolved_start(stream)` (the opening year):
+**Base case** — when `y == resolved_start(stream)`:
 
 ```
-seed       = stored_point_value(stream, y)
-seed_denom = stored_point_denomination(stream, y)
+(seed, seed_denom) = stored_point_value(stream, y)
 
 if seed_denom is YZV:
-    p(opening_year) = yzv_to_ynv(seed, opening_year, cpi)    -- assets
+    p(resolved_start) = yzv_to_ynv(seed, resolved_start, cpi)    -- assets
 elif seed_denom is PNV(ref_year):
-    p(opening_year) = seed                                    -- liabilities (already nominal)
+    p(resolved_start) = seed                                      -- liabilities (already nominal)
 ```
 
 Asset seeds (accounts, hard assets) are stored in `YZV` and converted to
-`YNV(opening_year)`. Liability seeds (credit lines) are stored as
+`YNV(resolved_start)`. Liability seeds (credit lines) are stored as
 `PNV(start_year)` — nominal at the contract date — and used directly (see
 [data-model.md § Liabilities](../data-model.md#liabilities)).
 
@@ -294,10 +289,10 @@ The remaining balance is computed via a year-over-year recurrence that applies
 year-end balance. `periods_per_year` is stored on the procedure variant
 (see [data-model.md § Stream Procedures](../data-model.md#stream-procedures)).
 
-**Base case** — when `y == resolved_start(stream)` (the opening year):
+**Base case** — when `y == resolved_start(stream)`:
 
 ```
-balance(opening_year) = seed                             -- nominal principal (negative)
+balance(resolved_start) = seed                           -- nominal principal (negative)
 ```
 
 The seed is the loan's nominal principal, stored as `PNV(start_year)`. No
