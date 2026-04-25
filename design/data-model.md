@@ -409,17 +409,6 @@ All assumption streams (CPI, return rates, allocation weights) are `RateStream`.
 Projection output streams are `DollarStream` (ephemeral; never persisted).
 
 ```
-AccountKind =
-    | Traditional401k
-    | Roth401k
-    | TraditionalIra
-    | RothIra
-    | Hsa
-    | Bank
-    | Brokerage
-    | JointBank
-    | JointBrokerage
-
 AccountOwner =
     | MemberOwned(member_id: Uuid)
     | JointOwned(plan_id: Uuid)
@@ -428,18 +417,16 @@ FilingStatus = Single | MarriedFilingJointly
 
 MemberRole = Primary | Spouse
 
-PropertyKind = PrimaryResidence | VacationHome | LandParcel
-
-LiabilityKind = AmortizedLoan | InterestOnlyLoan | CreditLine
-
 HsaCoverageType = SelfOnly | Family
 ```
 
-**Note on `AccountKind`:** The `DollarStream` kind is shared by all account types.
-The account type is carried on the `Account` entity. The engine dispatches on
-`Account.account_kind`, not on a stream-kind variant per account type. Similarly,
-`LiabilityKind` on the liability entity, and `PropertyKind` on the `Property`
-entity, provide type discrimination without encoding it in `StreamKind`.
+**Note on type discrimination:** No entity carries a "kind" enum. Accounts,
+properties, and vehicles are all treated uniformly by the engine through
+`StreamProcedure` and the aggregate `inputs` wiring. Liabilities are already
+distinct entity types (`AmortizedLoan`, `InterestOnlyLoan`, `CreditLine`) with
+different structs and different procedures — no discriminant is needed. An
+entity's role in the plan is determined by its position in the aggregate tree
+and its label, not by a type tag.
 
 ### Stream Label Conventions
 
@@ -670,11 +657,10 @@ RelationSpouseStream:
 Account {
     id:              Uuid,
     household_id:    Uuid,
-    account_kind:    AccountKind,
     owner:           AccountOwner,
     label:           string,         -- user-assigned label (e.g., "Fidelity 401k")
     closing_year:    Option<i32>,
-    coverage_type:   Option<HsaCoverageType>,  -- required when account_kind = Hsa; None for all other account kinds
+    coverage_type:   Option<HsaCoverageType>,  -- required for HSA accounts; None otherwise
 }
 ```
 
@@ -720,7 +706,6 @@ retirement pool but contribute to net worth.
 Property {
     id:               Uuid,
     plan_id:          Uuid,
-    property_kind:    PropertyKind,
     label:            string,
     purchase_year:    i32,
     sale_year:        Option<i32>,
@@ -1531,18 +1516,18 @@ are included; FUT and unanchored paths are omitted.
 | `assumptions / allocations / [ account ]` | — | `RateStream` (label=`"weight.<class>"`, owner=JointAccount) |
 | `household / [ member ]` | `Member` | `MemberLifecycleStream` |
 | `household / [ member ] / relations / spouse` | — | `RelationSpouseStream` |
-| `assets / accounts / [ member ] / [ 401k ]` | `Account` (kind=Traditional401k) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ roth-401k ]` | `Account` (kind=Roth401k) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ ira ]` | `Account` (kind=TraditionalIra) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ roth-ira ]` | `Account` (kind=RothIra) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ hsa ]` | `Account` (kind=Hsa) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ bank ]` | `Account` (kind=Bank, owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ member ] / [ brokerage ]` | `Account` (kind=Brokerage, owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ bank ]` | `Account` (kind=JointBank, owner=JointOwned) | `StreamTemplate` (label=`"balance"`) |
-| `assets / accounts / [ brokerage ]` | `Account` (kind=JointBrokerage, owner=JointOwned) | `StreamTemplate` (label=`"balance"`) |
-| `assets / hard-assets / properties / [ home ]` | `Property` (kind=PrimaryResidence) | `StreamTemplate` (label=`"balance"`) |
-| `assets / hard-assets / properties / [ vacation-home ]` | `Property` (kind=VacationHome) | `StreamTemplate` (label=`"balance"`) |
-| `assets / hard-assets / properties / [ parcel ]` | `Property` (kind=LandParcel) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ 401k ]` | `Account` (owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ roth-401k ]` | `Account` (owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ ira ]` | `Account` (owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ roth-ira ]` | `Account` (owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ hsa ]` | `Account` (owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ bank ]` | `Account` (owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ member ] / [ brokerage ]` | `Account` (owner=MemberOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ bank ]` | `Account` (owner=JointOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / accounts / [ brokerage ]` | `Account` (owner=JointOwned) | `StreamTemplate` (label=`"balance"`) |
+| `assets / hard-assets / properties / [ home ]` | `Property` | `StreamTemplate` (label=`"balance"`) |
+| `assets / hard-assets / properties / [ vacation-home ]` | `Property` | `StreamTemplate` (label=`"balance"`) |
+| `assets / hard-assets / properties / [ parcel ]` | `Property` | `StreamTemplate` (label=`"balance"`) |
 | `assets / hard-assets / [ vehicle ]` | `Vehicle` | `StreamTemplate` (label=`"balance"`) |
 | `contributions / [ member ] / [ 401k ] / employee` | — | `DollarStream` (Stored, inputs key `"employee-401k"`) |
 | `contributions / [ member ] / [ 401k ] / employer` | — | `DollarStream` (Stored, inputs key `"employer-401k"`) |

@@ -52,10 +52,10 @@ yarp/
             mod.rs                    # re-exports all entity submodules
             plan.rs                   # Plan, Household
             member.rs                 # Member, MemberRole, LifecycleEvent, EventKind
-            account.rs                # Account, AccountKind, AccountOwner, HsaCoverageType, FilingStatus
-            property.rs               # Property, PropertyKind
+            account.rs                # Account, AccountOwner, HsaCoverageType, FilingStatus
+            property.rs               # Property
             vehicle.rs                # Vehicle
-            liability.rs              # AmortizedLoan, InterestOnlyLoan, CreditLine, LiabilityKind
+            liability.rs              # AmortizedLoan, InterestOnlyLoan, CreditLine
           owned_by.rs                 # OwnedBy enum
           plan_graph.rs               # PlanGraph aggregate (serializable graph, distinct from Plan entity)
           plan_context.rs             # PlanContext (PlanGraph + derived caches, e.g. CpiFactors)

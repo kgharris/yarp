@@ -250,12 +250,9 @@ needed):
 - `OwnedBy` -- newtype and tuple variants
 - `MemberRole` -- unit variants only
 - `EventKind` -- unit variants only
-- `AccountKind` -- unit variants only
 - `AccountOwner` -- newtype variants
 - `HsaCoverageType` -- unit variants only
 - `FilingStatus` -- unit variants only
-- `PropertyKind` -- unit variants only
-- `LiabilityKind` -- unit variants only
 
 ### Struct-Level Attributes
 
@@ -427,7 +424,6 @@ are `None` are omitted.
       "a1b2c3d4-0000-5000-8000-000000000020": {
         "id": "a1b2c3d4-0000-5000-8000-000000000020",
         "household_id": "a1b2c3d4-0000-5000-8000-000000000002",
-        "account_kind": "Traditional401k",
         "owner": {
           "MemberOwned": "a1b2c3d4-0000-5000-8000-000000000010"
         },

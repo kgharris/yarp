@@ -328,16 +328,10 @@ enum EventKind { Retirement, SocialSecurityClaiming, MedicareEligibility, Custom
 struct Account {
     id:            Uuid,
     household_id:  Uuid,
-    account_kind:  AccountKind,
     owner:         AccountOwner,
     label:         String,
     closing_year:  Option<i32>,
     coverage_type: Option<HsaCoverageType>,
-}
-
-enum AccountKind {
-    Traditional401k, Roth401k, TraditionalIra, RothIra,
-    Hsa, Bank, Brokerage, JointBank, JointBrokerage,
 }
 
 enum AccountOwner {
@@ -351,15 +345,12 @@ enum FilingStatus { Single, MarriedFilingJointly }
 struct Property {
     id:                Uuid,
     plan_id:           Uuid,
-    property_kind:     PropertyKind,
     label:             String,
     purchase_year:     i32,
     sale_year:         Option<i32>,
     value_yzv:         Decimal,
     appreciation_rate: Decimal,
 }
-
-enum PropertyKind { PrimaryResidence, VacationHome, LandParcel }
 
 struct Vehicle {
     id:                Uuid,
@@ -404,7 +395,6 @@ struct CreditLine {
     interest_rate: Decimal,
 }
 
-enum LiabilityKind { AmortizedLoan, InterestOnlyLoan, CreditLine }
 ```
 
 All entity and stream types derive `Serialize`/`Deserialize` via serde.
