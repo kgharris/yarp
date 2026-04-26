@@ -94,11 +94,11 @@ All output formats share the same orientation: **columns are years, rows are
 streams**. The first column is a row label; subsequent columns are one per
 projection year in ascending order.
 
-Row labels use user-defined names from the plan: `Member.given_name` for members,
-`Account.label` for accounts, `Property.label` / `Vehicle.label` for hard assets,
-and liability entity labels for liabilities. Values containing commas are rejected
-at plan validation as `invalid-plan` errors — row labels must be safe for CSV
-output without quoting.
+Row labels use names directly from the plan data: `Member.given_name` for
+member age rows, entity labels for leaf balance rows, and stream labels for
+aggregate rows. No prefixes — the tree structure provides context. Values
+containing commas are rejected at plan validation as `invalid-plan` errors —
+row labels must be safe for CSV output without quoting.
 
 Rows are emitted in **leaf-first tree order**: leaf streams appear before the
 aggregate that sums them. The reader sees detail rows first, then the summary
@@ -108,22 +108,22 @@ Rows emitted, in order:
 
 | Row label | Content |
 |-----------|---------|
-| `age.<given_name>` | Age of the member in that year (one row per member) |
-| `bal.<label>` | End-of-year account balance (one row per retirement account) |
-| `agg.retirement` | Retirement aggregate (sum of 401k, Roth 401k, IRA, Roth IRA) |
-| `bal.<label>` | End-of-year account balance (one row per HSA) |
-| `agg.health` | Health aggregate (sum of HSA) |
-| `bal.<label>` | End-of-year account balance (one row per bank/brokerage) |
-| `agg.taxable` | Taxable aggregate (sum of bank and brokerage) |
-| `val.<label>` | End-of-year hard asset value (one row per property or vehicle) |
-| `agg.hard-assets` | Hard assets aggregate (sum of properties and vehicles) |
-| `agg.assets` | Total assets (retirement + health + taxable + hard-assets) |
-| `lia.<label>` | End-of-year balance (one row per amortized or interest-only loan) |
-| `agg.lt-liabilities` | Long-term liabilities aggregate (amortized + interest-only loans) |
-| `lia.<label>` | End-of-year balance (one row per credit line) |
-| `agg.st-liabilities` | Short-term liabilities aggregate (credit lines) |
-| `agg.liabilities` | Total liabilities (long-term + short-term) |
-| `agg.net-worth` | Net worth (assets minus liabilities) |
+| `<given_name>` | Age of the member in that year (one row per member) |
+| `<label>` | End-of-year account balance (one row per retirement account) |
+| `retirement` | Retirement aggregate (sum of 401k, Roth 401k, IRA, Roth IRA) |
+| `<label>` | End-of-year account balance (one row per HSA) |
+| `health` | Health aggregate (sum of HSA) |
+| `<label>` | End-of-year account balance (one row per bank/brokerage) |
+| `taxable` | Taxable aggregate (sum of bank and brokerage) |
+| `<label>` | End-of-year hard asset value (one row per property or vehicle) |
+| `hard-assets` | Hard assets aggregate (sum of properties and vehicles) |
+| `assets` | Total assets (retirement + health + taxable + hard-assets) |
+| `<label>` | End-of-year balance (one row per amortized or interest-only loan) |
+| `lt-liabilities` | Long-term liabilities aggregate (amortized + interest-only loans) |
+| `<label>` | End-of-year balance (one row per credit line) |
+| `st-liabilities` | Short-term liabilities aggregate (credit lines) |
+| `liabilities` | Total liabilities (long-term + short-term) |
+| `net-worth` | Net worth (assets minus liabilities) |
 
 ### CSV Output (default)
 
@@ -157,8 +157,8 @@ Example (illustrative widths only):
 ```
 stream                   2025      2026      2027
 ------------------------------------------------
-age.Alice                  45        46        47
-bal.401k            123456.78 130000.00 137000.00
+Alice                      45        46        47
+Alice 401k          123456.78 130000.00 137000.00
 ```
 
 Intended for manual inspection; not suitable for programmatic parsing.
@@ -172,8 +172,8 @@ A single JSON object written to stdout:
   "denomination": "ynv",
   "years": [2025, 2026, ...],
   "rows": [
-    { "stream": "age.<given_name>", "values": [45, 46, ...] },
-    { "stream": "bal.<label>", "values": [123456.78, 130000.00, ...] },
+    { "stream": "<given_name>", "values": [45, 46, ...] },
+    { "stream": "<label>", "values": [123456.78, 130000.00, ...] },
     ...
   ]
 }

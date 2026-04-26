@@ -1,8 +1,8 @@
 # Project Detailed Design
 
 This document covers project-wide implementation-level decisions: workspace
-layout, crate structure, dependencies, conventions, the CLI binary, and the
-build sequence. Component-specific detailed designs are in their respective
+layout, crate structure, dependencies, conventions, and the CLI binary.
+Component-specific detailed designs are in their respective
 directories:
 
 - [Engine detailed design](engine/detailed-design.md) — projection engine,
@@ -450,21 +450,3 @@ places only in `collect_projection_output` when building output
 
 ---
 
-## Build Sequence
-
-| Phase | What | Tests | Invariants |
-|-------|------|-------|------------|
-| M0 (Spike) | Standalone eval loop + BTreeMap MemoTable + Stored + EndOfYearGrowth with hard-coded types. No real entity types. Validate: recursion, memoization, Decimal precision, BTreeMap range scans. | 4 unit tests: memo hit, base case, 3-year recurrence, balance floor at zero. | — |
-| M1 | Core types (all entity structs, enums, Stream, StreamPoint, OwnedBy, ValueSchema). UUID v5 derivation. PlanGraph. | Type construction tests, UUID determinism tests. | — |
-| M2 | PlanStore trait, MemoryPlanStore, PlanBuilder (test helper). | Round-trip store tests. PlanBuilder smoke test. | — |
-| M3 | Denomination conversion. `compute_cpi_factors` (plan-load-time precomputation), `yzv_to_ynv` (table lookup), `convert_input_to_ynv`. | Unit tests: zero-value fast path, single-year factor, multi-year factor, PNV passthrough, factor table matches manual product. | — |
-| M4 | All six procedures with real types. `pow_decimal`. Balance bounds. | Per-procedure unit tests. The canonical numerical example ($10,000 seed, $1,000/yr, 3%/4% CPI, 6.4% rate → $10,000, $11,670, $13,488.08). Property-based tests (monotonicity, convergence). | — |
-| M5 | Timeline derivation. Projection tree construction. resolved_start/resolved_end/identity_value. | Tree construction tests. Resolved range tests for all OwnedBy variants. | — |
-| M6 | Eval sweep + output collection. Full end-to-end projection. | Golden-file tests. Integration test: single account, two members, contributions, 3-year projection matching the numerical example. | 3, 9 |
-| M7 | Validation (all 15 design invariants + structural checks). | Per-invariant unit tests (one test per validator). PlanBuilder constructs invalid plans to trigger each violation. | 1-2, 4-8, 10-15 |
-| M8 | JsonPlanStore + generate() pipeline + round-trip test. | Generate → load → validate → project end-to-end test. Self-check passes. | — |
-| M9 | CLI binary. Table/CSV/JSON formatting. Error output. | CLI integration tests: each output format, each error case. Golden-file comparison for output formatting. | — |
-
-The spike (M0) is explicitly throwaway for the types but the algorithm carries
-forward. Real types replace the hard-coded stubs in M1, and the eval function
-signature stabilizes in M4 when real procedures are wired.

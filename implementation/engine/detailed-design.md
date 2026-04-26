@@ -152,6 +152,37 @@ impl PlanGraph {
 This eliminates all stream-scanning patterns. CPI resolution, balance template
 lookup, rate stream lookup -- all become `plan_graph.stream(owner_id, label)`.
 
+**Owner label lookup.** `PlanGraph` also exposes a method to resolve the
+user-facing display name for any `OwnedBy` reference. This is the canonical
+path from a stream to its owner's human-readable label -- callers never
+search entity collections directly.
+
+```rust
+impl PlanGraph {
+    fn owner_label(&self, owner: &OwnedBy) -> &str {
+        match owner {
+            OwnedBy::Member(id) => &self.members[id].given_name,
+            OwnedBy::Account(id)
+            | OwnedBy::MemberAccount(_, id)
+            | OwnedBy::JointAccount(id) => &self.accounts[id].label,
+            OwnedBy::Property(id) => &self.properties[id].label,
+            OwnedBy::Vehicle(id) => &self.vehicles[id].label,
+            OwnedBy::Liability(id) => {
+                if let Some(l) = self.amortized_loans.get(id) {
+                    &l.label
+                } else if let Some(l) = self.interest_only_loans.get(id) {
+                    &l.label
+                } else {
+                    &self.credit_lines[id].label
+                }
+            }
+            OwnedBy::Plan(_) | OwnedBy::Relationship(_, _)
+            | OwnedBy::PolicyTable(_) => panic!("no display label for {owner:?}"),
+        }
+    }
+}
+```
+
 ### Stream
 
 ```rust
@@ -471,6 +502,7 @@ impl<S: PlanStore> Model<S> {
 ```rust
 struct Projection {
     years: Vec<i32>,                          // projection year range, ascending
+    root_id: Uuid,                            // net-worth aggregate stream (tree walk entry point)
     streams: Vec<Stream>,                     // ephemeral projection streams
     points: IndexMap<Uuid, Vec<StreamPoint>>, // points keyed by stream id, denomination YNV(point.year)
 }
@@ -1194,8 +1226,8 @@ add prefixes, parse the string, or construct their own error messages.
 
 ---
 
-CLI integration and build sequence are defined in the
-[project plan](../plan.md#cli-integration).
+CLI integration is defined in the
+[project detailed design](../detailed-design.md#cli-integration).
 
 ---
 
