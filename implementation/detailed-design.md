@@ -66,7 +66,7 @@ yarp/
           json.rs                     # JsonPlanStore (production backend)
         engine/
           mod.rs                      # re-exports; no public surface beyond Model
-          timeline.rs                 # Phase 1: timeline derivation
+          timeline.rs                 # timeline derivation (called at load time, cached on PlanContext)
           tree.rs                     # Phase 2: projection tree construction
           eval.rs                     # Phase 3: eval(), sweep loop, MemoTable
           procedures/
@@ -77,7 +77,7 @@ yarp/
             end_of_year_growth.rs     # EndOfYearGrowth base case + recurrence
             amortized_schedule.rs     # AmortizedSchedule base case + recurrence
             interest_only.rs          # InterestOnly procedure
-          convert.rs                  # yzv_to_ynv, convert_input_to_ynv
+          convert.rs                  # yzv_to_ynv
           lifecycle.rs                # MemberLifecycleStream resolution
           resolve.rs                  # resolved_start, resolved_end, identity_value
           stored_point.rs             # stored_point_value, cursor logic
@@ -91,7 +91,7 @@ yarp/
             labels.rs                 # check 15
             structural.rs             # has_members, has_accounts, cpi_exists, input_refs, event_refs, required_slots, commas, effective_rate_tree
           generate.rs                 # generate() pipeline
-        model.rs                      # Model<S: PlanStore> facade
+        model.rs                      # Model facade (associated functions)
       tests/                            # integration tests (crate-external, use pub API only)
         common/
           mod.rs                      # shared test helpers: fixture loader, plan_builder, result comparator
@@ -182,6 +182,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 proptest = "1"
+tempfile = "3"
 ```
 
 **Binary crate** (`crates/yarp-cli/Cargo.toml`):
@@ -199,6 +200,9 @@ path = "src/main.rs"
 [dependencies]
 yarp-core = { path = "../yarp-core" }
 clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = "0"
 ```
 
 The binary is named `yarp-cli` to distinguish it from the future Tauri GUI
@@ -228,8 +232,10 @@ enforced by visibility, not crate boundaries:
 
 With this visibility, `yarp-cli` (or any future dependent like `yarp-tauri`)
 sees only `Model`, `ModelError`, `Projection`, `GeneratePlanParams`, and the
-type definitions. It cannot import `eval()`, `JsonPlanStore`, or any
-engine/store internal. The module boundary enforces the MVC contract at compile
+type definitions. It cannot import `eval()`, `JsonPlanStore`, `PlanStore`, or
+any engine/store internal. `Model`'s public associated functions (`load`,
+`generate`, `get_projection`) use `JsonPlanStore` internally — callers never
+name the store type. The module boundary enforces the MVC contract at compile
 time — the same guarantee a crate boundary would provide, without the overhead.
 
 The one rule `pub(crate)` does not enforce is that `engine` never imports from
@@ -252,9 +258,11 @@ layout throughout.
 
 `lib.rs` re-exports the public API surface. Internal modules (`engine`, `store`)
 are `pub(crate)` — only `model.rs` and `types/` are `pub`. The library's public
-surface is intentionally narrow: `Model`, `ModelError`, `Projection`,
-`GeneratePlanParams`, `PlanContext`, `PlanGraph`, and the type definitions
-needed to construct and inspect them.
+surface is intentionally narrow: `Model` (unit struct with associated
+functions), `ModelError`, `Projection`, `GeneratePlanParams`, `PlanContext`,
+`PlanGraph`, and the type definitions needed to construct and inspect them.
+`PlanStore`, `JsonPlanStore`, and `MemoryPlanStore` are not public — `Model`
+encapsulates the store internally.
 
 ---
 
@@ -277,11 +285,16 @@ needed to construct and inspect them.
 ## PlanStore Trait
 
 ```rust
-trait PlanStore {
+pub(crate) trait PlanStore {
     fn load(&self, dir: &Path) -> Result<PlanGraph, PlanStoreError>;
     fn save(&self, dir: &Path, plan: &PlanGraph) -> Result<(), PlanStoreError>;
 }
 ```
+
+`PlanStore` and its implementations are `pub(crate)` — internal to `yarp-core`.
+`Model`'s public associated functions (`load`, `generate`) use `JsonPlanStore`
+internally. Test entry points (`load_with`, `generate_with`) accept any
+`PlanStore` implementation.
 
 Two implementations:
 
@@ -320,51 +333,9 @@ enum PlanStoreError {
 
 ## CLI Integration
 
-`yarp-cli` binary with `clap` derive for argument parsing. Three output
-formats: table (default), CSV, JSON.
-
-### Args
-
-```rust
-#[derive(clap::Parser)]
-struct Args {
-    /// Path to plan directory
-    path: PathBuf,
-
-    /// Output as CSV
-    #[arg(long, group = "format")]
-    csv: bool,
-
-    /// Output as JSON
-    #[arg(long, group = "format")]
-    json: bool,
-
-    /// Generate a new plan instead of projecting
-    #[arg(long)]
-    generate: bool,
-}
-```
-
-### Mode Dispatch
-
-- `--generate`: call `Model::generate(path, GeneratePlanParams { anchor_year: current_year })`,
-  print success message, exit 0.
-- Default (project): call `Model::load(path)`, then
-  `Model::get_projection(&plan)`. Format output per the selected format and
-  write to stdout.
-
-### Output Row Order
-
-Lifecycle rows first (one per member), then leaf balance rows (accounts,
-properties, vehicles, liabilities), then aggregate rows in tree order
-(retirement, health, taxable, hard-assets, assets, lt-liabilities,
-st-liabilities, liabilities, net-worth). This matches the projection tree's
-structure for readability.
-
-### Error Output
-
-Catch `ModelError`, write its `Display` output to stderr, exit 1. No additional
-formatting — the Model layer owns the error format.
+See [implementation/ux/cli/detailed-design.md](ux/cli/detailed-design.md) for
+the authoritative CLI specification — argument parsing, output formats, mode
+dispatch, row ordering, error handling, and formatter design.
 
 ---
 

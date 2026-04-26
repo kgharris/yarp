@@ -13,30 +13,28 @@ facade delegates to internally.
 
 ```
 Model {
-    /// Load a plan from a directory. Delegates to PlanStore::load(), which
-    /// checks the schema version and validates the plan before returning.
+    /// Load a plan from a directory. Loads the plan graph, derives timeline
+    /// bounds, computes CPI factors, validates, and returns a PlanContext.
     /// A version mismatch returns SchemaMismatch immediately — no migration
-    /// is attempted in MVP. Callers receive a clean Plan or a typed error;
-    /// no raw or unversioned data escapes this boundary.
-    load(dir: &Path) -> Result<Plan, ModelError>
+    /// is attempted in MVP. Callers receive a clean PlanContext or a typed
+    /// error; no raw or unversioned data escapes this boundary.
+    load(dir: &Path) -> Result<PlanContext, ModelError>
 
-    /// Generate a minimal runnable plan and write it to a new directory.
-    ///
-    /// Constructs the Plan graph from GeneratePlanParams, then delegates to
-    /// PlanStore::save() to persist it. The directory must not already exist.
+    /// Generate a minimal runnable plan and write it to a directory.
+    /// If the directory already exists, its plan files are overwritten.
     generate(dir: &Path, params: GeneratePlanParams) -> Result<(), ModelError>
 
     /// Run the projection engine over a loaded plan. Output is always YNV —
-    /// no denomination parameter. The caller supplies a Plan previously
+    /// no denomination parameter. The caller supplies a PlanContext previously
     /// returned by load(); projection is stateless and has no side effects.
-    get_projection(plan: &Plan) -> Result<Projection, ModelError>
+    get_projection(plan: &PlanContext) -> Result<Projection, ModelError>
 }
 ```
 
-`Plan` is the deserialized, fully-validated in-memory plan graph — the data
-structure the engine consumes. `Model::generate()` is responsible for
-constructing the minimal `Plan`; `PlanStore::save()` is responsible for
-writing it to disk.
+`PlanContext` wraps the deserialized plan graph with precomputed caches
+(timeline bounds, CPI factors). It is the fully-validated in-memory
+representation the engine consumes. `Model::generate()` is responsible for
+constructing the minimal plan; persistence is handled internally.
 
 ---
 
@@ -62,6 +60,7 @@ plan. All dollar-denominated points carry denomination `YNV(point.year)`.
 ```
 Projection {
     years:   Vec<i32>,                         -- projection year range, ascending
+    root_id: StreamId,                         -- net-worth aggregate stream (tree walk entry point)
     streams: Vec<Stream>,                      -- ephemeral projection streams
     points:  Map<StreamId, Vec<StreamPoint>>,  -- points keyed by stream id
 }

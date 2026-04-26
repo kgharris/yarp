@@ -55,9 +55,7 @@ formatted error to stderr and exits 1.
 The CLI imports these types from `yarp-core`:
 
 **Facade:**
-- `Model<S: PlanStore>` — `new()`, `load()`, `generate()`,
-  `get_projection()`
-- `JsonPlanStore` — concrete store for CLI instantiation
+- `Model` — `load()`, `generate()`, `get_projection()` (associated functions)
 - `GeneratePlanParams` — `{ anchor_year: i32 }`
 
 **Output types:**
@@ -78,7 +76,7 @@ The CLI imports these types from `yarp-core`:
 
 The CLI does **not** access engine internals (`eval`, `MemoTable`,
 `resolved_start`, `resolved_end`, procedures), persistence internals
-(`PlanStoreError`), or stream construction APIs.
+(`PlanStore`, `JsonPlanStore`, `PlanStoreError`), or stream construction APIs.
 
 ---
 
@@ -201,9 +199,8 @@ Unix convention.
 
 ```rust
 fn run_project(dir: &Path, format: OutputFormat) -> Result<(), CliError> {
-    let model = Model::new(JsonPlanStore);
-    let plan_ctx = model.load(dir)?;
-    let projection = model.get_projection(&plan_ctx)?;
+    let plan_ctx = Model::load(dir)?;
+    let projection = Model::get_projection(&plan_ctx)?;
     let stdout = std::io::stdout();
     let writer = stdout.lock();
     let mut formatter: Box<dyn Formatter> = match format {
@@ -222,11 +219,10 @@ fn run_project(dir: &Path, format: OutputFormat) -> Result<(), CliError> {
 
 ```rust
 fn run_generate(dir: &Path) -> Result<(), CliError> {
-    let model = Model::new(JsonPlanStore);
     let params = GeneratePlanParams {
         anchor_year: chrono::Local::now().year(),
     };
-    model.generate(dir, params)?;
+    Model::generate(dir, params)?;
     println!("Plan created in {}", dir.display());
     Ok(())
 }

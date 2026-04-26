@@ -10,7 +10,7 @@ signatures, serialization strategy, and load/save pipelines -- at a level below
 The DB component is the persistence layer within the Model. It reads and writes
 `PlanGraph` data to and from storage backends. It performs no computation, no
 validation beyond format compatibility checks, and has no awareness of the
-engine or any layer above the Model facade. Its sole consumer is `Model<S>` in
+engine or any layer above the Model facade. Its sole consumer is `Model` in
 `model.rs`.
 
 For workspace layout, crate structure, dependencies, CLI integration, and build
@@ -73,11 +73,12 @@ pub(crate) trait PlanStore {
 }
 ```
 
-`Model<S: PlanStore>` uses static dispatch (generic, not `dyn`). The generic is
-bound at construction via `Model::new(store: S)`. The trait returns `PlanGraph`
-(the serializable aggregate), not `Plan` (the entity record). The design spec
-uses `Plan` but the project DD refines this to `PlanGraph`; the project DD
-governs at the implementation level.
+`Model` calls `PlanStore` methods internally via its `load_with` and
+`generate_with` associated functions. The default `load()` and `generate()`
+use `JsonPlanStore`; tests use `load_with(&MemoryPlanStore::new(), dir)`. The
+trait returns `PlanGraph` (the serializable aggregate), not `Plan` (the entity
+record). The design spec uses `Plan` but the project DD refines this to
+`PlanGraph`; the project DD governs at the implementation level.
 
 For the `Model` facade definition and its methods, see the
 [engine detailed design](../engine/detailed-design.md#model-facade-api).
@@ -905,14 +906,11 @@ domain validation (the 15 design invariants) runs later in `Model::load()`.
    directory's existence is the caller's responsibility.
 2. If `dir` exists but is not a directory, return
    `Io(std::io::Error::new(ErrorKind::InvalidInput, "path exists but is not a directory"))`.
-3. Sort each stream's points by year before serialization for deterministic
-   output:
-   `plan.points.values().for_each(|v| /* assert sorted or sort a copy */)`.
-   Because `save` takes `&PlanGraph` (immutable), the sort must operate on a
-   cloned `points` map or the caller must guarantee sorted order. In practice,
-   `PlanGraph` points are sorted at load time (step 6 of the load pipeline) and
-   `generate()` builds them in sorted order, so this is a defensive assertion
-   rather than an active sort. If the assertion fails, clone and sort.
+3. Assert each stream's points are sorted by year (`debug_assert`). Sorted
+   order is a `PlanGraph` invariant maintained at the point of mutation —
+   `load()` sorts on ingest, `generate()` builds in order, and future
+   mutation APIs insert in sorted position. `save()` verifies the invariant
+   but does not enforce it.
 4. Build a `PlanFile<'a>` wrapper:
    ```rust
    let plan_file = PlanFile {
@@ -1038,14 +1036,20 @@ needed because `PlanContext` is never serialized.
 
 ```
 Model::load(dir):
-    let graph = self.store.load(dir)?;                     // returns PlanGraph
+    Self::load_with(&JsonPlanStore, dir)
+
+Model::load_with(store, dir):
+    let graph = store.load(dir)?;                          // returns PlanGraph
+    let (timeline_start, timeline_end) =
+        engine::timeline::derive_timeline(&graph);         // engine function
     let cpi_factors = engine::convert::compute_cpi_factors(
         cpi_stream_id,
         &graph.points,
         graph.plan.anchor_year,
+        timeline_start,
         timeline_end,
     );                                                     // engine function
-    let plan_ctx = PlanContext { graph, cpi_factors };
+    let plan_ctx = PlanContext { graph, timeline_start, timeline_end, cpi_factors };
     engine::validate::validate(&plan_ctx)?;                // engine function
     Ok(plan_ctx)
 ```

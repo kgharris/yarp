@@ -192,9 +192,10 @@ A single JSON object written to stdout:
 
 ## Generate Mode
 
-`--generate-plan <dir>` creates a minimal plan directory at the given path. The
-path must not already exist; filesystem failures are returned as `ModelError`
-and written to stderr by the CLI (exit 1).
+`--generate-plan <dir>` creates a minimal plan directory at the given path. If
+the directory already exists, its plan files are overwritten. Filesystem
+failures are returned as `ModelError` and written to stderr by the CLI
+(exit 1).
 
 The generated plan contains:
 
@@ -220,11 +221,6 @@ The generated plan contains:
 `anchor_year` is written as a top-level field in the generated plan and equals
 the current calendar year at generation time. All monetary placeholder values
 are YZV denominated in that `anchor_year`.
-
-After writing the plan files, the CLI runs `Model::load()` on the generated
-directory as a self-check. If validation fails, the CLI exits 1 with the
-`ModelError` on stderr. A successful `--generate-plan` run guarantees that
-`yarp-cli <dir>` exits 0 immediately afterward without user edits.
 
 On success, the CLI writes exactly one line to stdout:
 

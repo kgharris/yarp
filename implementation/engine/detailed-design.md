@@ -29,7 +29,7 @@ modules are:
 ```
 engine/
   mod.rs                      # re-exports; no public surface beyond Model
-  timeline.rs                 # Phase 1: timeline derivation
+  timeline.rs                 # timeline derivation (called at load time, cached on PlanContext)
   tree.rs                     # Phase 2: projection tree construction
   eval.rs                     # Phase 3: eval(), sweep loop, MemoTable
   procedures/
@@ -40,7 +40,7 @@ engine/
     end_of_year_growth.rs     # EndOfYearGrowth base case + recurrence
     amortized_schedule.rs     # AmortizedSchedule base case + recurrence
     interest_only.rs          # InterestOnly procedure
-  convert.rs                  # yzv_to_ynv, convert_input_to_ynv
+  convert.rs                  # yzv_to_ynv
   lifecycle.rs                # MemberLifecycleStream resolution
   resolve.rs                  # resolved_start, resolved_end, identity_value
   stored_point.rs             # stored_point_value, cursor logic
@@ -54,7 +54,7 @@ engine/
     labels.rs                 # check 15
     structural.rs             # has_members, has_accounts, cpi_exists, input_refs, event_refs, required_slots, commas, effective_rate_tree
   generate.rs                 # generate() pipeline
-model.rs                      # Model<S: PlanStore> facade
+model.rs                      # Model facade (associated functions)
 ```
 
 Authoritative design specifications:
@@ -115,14 +115,18 @@ derived data, while the engine always has its caches available.
 ```rust
 struct PlanContext {
     graph: PlanGraph,
+    timeline_start: i32,      // min(member.birth_year) — precomputed at load time
+    timeline_end: i32,        // max(member.birth_year + member.death_age) — precomputed at load time
     cpi_factors: CpiFactors,  // precomputed at load time
 }
 ```
 
 `Model::load()` constructs `PlanContext` by loading the `PlanGraph` via the
-store, computing `CpiFactors`, running validation, and wrapping the result.
-Future derived caches (e.g., timeline bounds, entity indexes) are added here,
-not on `PlanGraph`.
+store, deriving the timeline bounds from member lifetimes, computing
+`CpiFactors`, running validation, and wrapping the result. Timeline bounds
+and CPI factors are computed once at load time and reused by `get_projection()`
+— no re-derivation during the projection pipeline. Future derived caches
+(e.g., entity indexes) are added here, not on `PlanGraph`.
 
 Use `IndexMap<Uuid, T>` rather than `HashMap<Uuid, T>` for entity collections.
 This gives O(1) lookup by ID with deterministic iteration order.
@@ -191,7 +195,7 @@ struct Stream {
     kind:         StreamKind,
     label:        Option<String>,
     owner:        OwnedBy,
-    start:        StreamStart,
+    start:        Option<StreamStart>,
     terminates:   Option<TerminationRef>,
     inputs:       IndexMap<String, Uuid>,
     procedure:    StreamProcedure,
@@ -476,25 +480,39 @@ concatenation of constituent UUIDs: `"{member_id}:{account_id}"` or
 
 ## Model Facade API
 
-`Model<S: PlanStore>` is the sole public entry point into the Model layer. It
-delegates persistence to `S` and computation to the engine. Callers never see
+`Model` is the sole public entry point into the Model layer. It is a unit
+struct used as a namespace for associated functions — not an instance that
+holds state. Persistence is internal: the default methods use `JsonPlanStore`;
+test entry points accept any `PlanStore` implementation. Callers never see
 `PlanStore`, `JsonPlanStore`, or engine internals.
 
 ```rust
-struct Model<S: PlanStore> {
-    store: S,
-}
+struct Model;
 
-impl<S: PlanStore> Model<S> {
-    fn new(store: S) -> Self;
-    fn load(&self, dir: &Path) -> Result<PlanContext, ModelError>;
-    fn generate(&self, dir: &Path, params: GeneratePlanParams) -> Result<(), ModelError>;
-    fn get_projection(&self, plan: &PlanContext) -> Result<Projection, ModelError>;
+impl Model {
+    /// Load a plan from a directory using JsonPlanStore.
+    fn load(dir: &Path) -> Result<PlanContext, ModelError>;
+
+    /// Generate a minimal plan directory using JsonPlanStore.
+    fn generate(dir: &Path, params: GeneratePlanParams) -> Result<(), ModelError>;
+
+    /// Run the projection engine. Pure computation — no store needed.
+    fn get_projection(plan: &PlanContext) -> Result<Projection, ModelError>;
+
+    /// Test entry point: load with an arbitrary PlanStore backend.
+    fn load_with(store: &impl PlanStore, dir: &Path) -> Result<PlanContext, ModelError>;
+
+    /// Test entry point: generate with an arbitrary PlanStore backend.
+    fn generate_with(store: &impl PlanStore, dir: &Path, params: GeneratePlanParams) -> Result<(), ModelError>;
 }
 ```
 
-`PlanStore` trait and `PlanStoreError` are defined in the
-[project plan](../plan.md#planstore-trait). `ModelError` maps 1:1 from
+The default `load()` and `generate()` delegate to `load_with(&JsonPlanStore, dir)`
+and `generate_with(&JsonPlanStore, dir, params)` respectively. Test harnesses
+call `load_with` / `generate_with` directly with `MemoryPlanStore`.
+
+`PlanStore`, `JsonPlanStore`, and `MemoryPlanStore` remain `pub(crate)` — they
+are never visible outside `yarp-core`. `ModelError` maps 1:1 from
 `PlanStoreError`; `Model` converts at the facade boundary.
 
 ### Projection
@@ -525,34 +543,27 @@ struct GeneratePlanParams {
 
 ## Memo Table
 
-The memo table uses `BTreeMap<(Uuid, i32), Decimal>` as its backing store.
+The memo table uses `BTreeMap<(Uuid, i32), (Decimal, PointDenomination)>` as
+its backing store. Every entry records both the computed value and its
+denomination. This allows denomination-aware procedures to read an input's
+denomination from a single `eval()` call without a separate lookup path.
 
 ```rust
 struct MemoTable {
-    values: BTreeMap<(Uuid, i32), Decimal>,
+    values: BTreeMap<(Uuid, i32), (Decimal, PointDenomination)>,
 }
 
 impl MemoTable {
-    fn get(&self, stream_id: Uuid, year: i32) -> Option<Decimal> {
+    fn get(&self, stream_id: Uuid, year: i32) -> Option<(Decimal, PointDenomination)> {
         self.values.get(&(stream_id, year)).copied()
     }
 
-    fn set(&mut self, stream_id: Uuid, year: i32, value: Decimal) {
-        self.values.insert((stream_id, year), value);
+    fn set(&mut self, stream_id: Uuid, year: i32, value: Decimal, denom: PointDenomination) {
+        self.values.insert((stream_id, year), (value, denom));
     }
 
-    fn get_prior(&self, stream_id: Uuid, year: i32) -> Option<Decimal> {
-        self.values.get(&(stream_id, year - 1)).copied()
-    }
-
-    fn stream_values(&self, stream_id: Uuid) -> impl Iterator<Item = (i32, Decimal)> + '_ {
-        self.values
-            .range((stream_id, i32::MIN)..=(stream_id, i32::MAX))
-            .map(|(&(_, year), &value)| (year, value))
-    }
-
-    fn dump(&self) -> BTreeMap<(Uuid, i32), Decimal> {
-        self.values.clone()
+    fn get_prior_value(&self, stream_id: Uuid, year: i32) -> Option<Decimal> {
+        self.values.get(&(stream_id, year - 1)).map(|(v, _)| *v)
     }
 }
 ```
@@ -562,15 +573,17 @@ UUID. This provides:
 
 - O(log n) single-key lookup. For the expected memo table size of ~8,000
   entries (100 streams x 80 years), that is ~13 comparisons -- negligible.
-- Efficient per-stream range scan for snapshot dumps and golden-file tests.
-- Natural ordering by stream then year in debug output.
-- Direct prior-year lookup via `get(&(stream_id, y - 1))` for recurrence
-  formulas.
+- Direct prior-year lookup via `get_prior_value(&(stream_id, y - 1))` for
+  recurrence formulas (which need only the value, not the denomination).
 
-Lifecycle age values are written directly to the main memo table as `Decimal`
-during Phase 3 step 1 (before standard eval). No separate `LifecycleTable` is
-needed -- with `phase` removed, `MemberLifecycleStream` has a single attribute
-(`age`) that fits the memo table's one-value-per-key model.
+The memo table is a computation cache — it exists so `eval` doesn't recompute
+values that are needed multiple times (e.g., `p(y-1)` for the recurrence, or a
+shared input referenced by multiple streams). It is not the output. The
+`Projection` is built constructively during the sweep.
+
+Lifecycle age values are written directly to the main memo table during Phase 3
+step 1 (before standard eval) with denomination `Ynv { target_year: year }`.
+No separate `LifecycleTable` is needed.
 
 ---
 
@@ -594,40 +607,61 @@ means:
 
 ```rust
 /// Precomputed cumulative CPI factors for O(1) year-indexed lookup.
-/// Backed by a Vec with an offset: index 0 = anchor_year.
+/// Backed by a Vec with an offset: index 0 = timeline_start.
+/// Factor at anchor_year is always 1.0. Years before anchor have
+/// factors < 1.0 (deflation); years after have factors > 1.0.
 struct CpiFactors {
-    anchor_year: i32,
-    factors: Vec<Decimal>,  // factors[y - anchor_year] = cumulative factor for year y
+    timeline_start: i32,
+    factors: Vec<Decimal>,  // factors[y - timeline_start] = cumulative factor for year y
 }
 
 impl CpiFactors {
     fn get(&self, year: i32) -> Decimal {
-        self.factors[(year - self.anchor_year) as usize]
+        self.factors[(year - self.timeline_start) as usize]
     }
 }
 ```
 
 ### compute_cpi_factors
 
-Compute during `PlanContext` construction (after the store loads the `PlanGraph`):
+Compute during `PlanContext` construction (after the store loads the
+`PlanGraph`). The table spans `timeline_start..=timeline_end`, covering the
+full plan timeline. Years before `anchor_year` have factors < 1.0 (backward
+deflation); `anchor_year` has factor 1.0; years after have factors > 1.0
+(forward inflation).
 
 ```rust
 fn compute_cpi_factors(
     cpi_stream_id: Uuid,
     points: &IndexMap<Uuid, Vec<StreamPoint>>,
     anchor_year: i32,
+    timeline_start: i32,
     timeline_end: i32,
 ) -> CpiFactors {
-    let len = (timeline_end - anchor_year + 1) as usize;
-    let mut factors = Vec::with_capacity(len);
+    let len = (timeline_end - timeline_start + 1) as usize;
+    let anchor_offset = (anchor_year - timeline_start) as usize;
+    let mut factors = vec![Decimal::ZERO; len];
+
+    // Anchor year: factor = 1.0
+    factors[anchor_offset] = Decimal::ONE;
+
+    // Forward pass: anchor_year+1 ..= timeline_end
     let mut cumulative = Decimal::ONE;
-    factors.push(cumulative);  // anchor_year: factor = 1.0
     for year in (anchor_year + 1)..=timeline_end {
         let cpi_rate = carry_forward_value(cpi_stream_id, year - 1, points);
         cumulative *= Decimal::ONE + cpi_rate;
-        factors.push(cumulative);
+        factors[(year - timeline_start) as usize] = cumulative;
     }
-    CpiFactors { anchor_year, factors }
+
+    // Backward pass: anchor_year-1 ..= timeline_start (descending)
+    cumulative = Decimal::ONE;
+    for year in (timeline_start..anchor_year).rev() {
+        let cpi_rate = carry_forward_value(cpi_stream_id, year, points);
+        cumulative /= Decimal::ONE + cpi_rate;
+        factors[(year - timeline_start) as usize] = cumulative;
+    }
+
+    CpiFactors { timeline_start, factors }
 }
 ```
 
@@ -636,6 +670,14 @@ carry-forward semantics on the CPI stream's points (most recent point at or
 before the query year). This is the same resolution logic used by the `Stored`
 procedure but called directly on the points vec -- no eval/memo machinery
 needed.
+
+**Backward deflation:** For years before `anchor_year`, the factor is the
+reciprocal of the cumulative inflation from that year to `anchor_year`. If
+CPI is 3% for all years: factor(anchor-1) = 1/1.03 ≈ 0.9709, factor(anchor-2)
+= 1/(1.03)² ≈ 0.9426. This means `yzv_to_ynv($100, anchor-1)` returns ~$97.09
+-- the YZV amount deflated to the earlier year's nominal dollars. This is the
+correct conversion: a $100 YZV seed for a property purchased before the anchor
+year should be worth less in that earlier year's nominal terms.
 
 ### yzv_to_ynv
 
@@ -683,8 +725,9 @@ fn stored_point_value(
 ) -> (Decimal, PointDenomination)
 ```
 
-Both fields are read from the same `PointEntry`. No separate
-`stored_point_denomination` function is needed.
+Both fields are read from the same `PointEntry`. The denomination flows
+through `eval()` into the memo table, so consumers of `eval()` receive both
+the value and its denomination without a separate lookup.
 
 Carry-forward applies to ALL value units:
 
@@ -698,11 +741,13 @@ This applies to the `Stored` procedure and to seed lookups.
 ## Active Range Resolution
 
 `resolved_start` and `resolved_end` are free functions that take `&PlanGraph`
-(accessed via `plan_ctx.graph` at call sites). No separate `EntityIndex` --
-`PlanGraph` already holds all entity collections keyed by UUID in `IndexMap`s.
+(accessed via `plan_ctx.graph` at call sites). They are only called for streams
+with `start: Some(...)` — aggregate streams (`start: None`) skip range
+checking entirely. No separate `EntityIndex` -- `PlanGraph` already holds all
+entity collections keyed by UUID in `IndexMap`s.
 
 ```rust
-fn resolved_start(stream: &Stream, plan: &PlanGraph) -> i32;
+fn resolved_start(stream: &Stream, plan: &PlanGraph) -> i32;   // panics if start is None
 fn resolved_end(stream: &Stream, plan: &PlanGraph, timeline_end: i32) -> i32;
 ```
 
@@ -733,15 +778,21 @@ Priority chain (applied in order):
 
 ### identity_value
 
-- `Decimal` unit: return `Decimal::ZERO`
+Returns `(Decimal, PointDenomination)`:
+
+- `Decimal` unit: `(Decimal::ZERO, Yzv)` -- zero converts to zero in any
+  denomination; `Yzv` is a safe default.
 - `Rate`, `Count`, `Years`, `Age` units: carry-forward from current cursor
-  position. Fall back to `AttributeDef.initial`.
+  position, with its stored denomination. Fall back to
+  `(AttributeDef.initial, Yzv)`.
 
-### Aggregate Stream Start
+### Aggregate Streams
 
-Aggregate streams use `timeline_start` as their start year (not `i32::MIN`).
-Aggregates produce identity=0 via their `Additive` procedure for years where
-all children are inactive.
+Aggregate streams have `start: None` — they are derived, not concrete. They
+have no lifecycle of their own. `eval` always dispatches for them (no range
+check). If all children produce identity (zero) for a given year, the
+`Additive` sum is zero — the aggregate naturally reflects its children's
+activity without needing its own active range.
 
 ---
 
@@ -760,7 +811,7 @@ fn dispatch(
     year: i32,
     ctx: &EvalContext,
     memo: &mut MemoTable,
-) -> Decimal
+) -> (Decimal, PointDenomination)
 ```
 
 ### EvalContext
@@ -778,106 +829,132 @@ struct EvalContext<'a> {
 All fields needed during eval -- `streams`, `points`, `anchor_year`,
 `cpi_factors`, `timeline_start`, `timeline_end` -- are accessible through
 these two references. `tree` provides the merged stream map and projection
-metadata. `plan_graph` provides entity lookups, CPI factors, and the
-`stream()` accessor.
+metadata. `plan_ctx` provides entity lookups, CPI factors, timeline bounds,
+and the `stream()` accessor.
 
 ### Stored
 
 ```
-result = stored_point_value(stream_id, year, ctx)
+(value, denom) = stored_point_value(stream_id, year, ctx)
+result = (value, denom)
 ```
 
-No inputs. Returns the carry-forward value.
+No inputs. Returns the carry-forward value and its denomination as-is.
 
 ### Additive
 
 ```
-result = sum(eval(input_id, year) for input_id in stream.inputs.values())
+total = sum(eval(input_id, year).0 for input_id in stream.inputs.values())
+result = (total, Ynv { target_year: year })
 ```
+
+The sum of already-evaluated inputs. Denomination is `Ynv` because children
+are either already-converted dollar values or dimensionless rates -- in either
+case the sum is in the year's frame.
 
 ### Product
 
 ```
-result = eval(stream.inputs["weight"], year) * eval(stream.inputs["rate"], year)
+w = eval(stream.inputs["weight"], year).0
+r = eval(stream.inputs["rate"], year).0
+result = (w * r, Ynv { target_year: year })
 ```
 
 ### EndOfYearGrowth
 
-Denomination-aware: evaluates its own inputs internally rather than receiving
-pre-evaluated `input_vals`. This avoids redundant re-evaluation to get stream
-IDs for denomination lookup.
+Denomination-aware. All inputs are evaluated via `eval()`, which returns
+`(Decimal, PointDenomination)`. The denomination on the returned tuple tells
+the procedure whether to apply YZV-to-YNV conversion.
 
 **Base case** (`year == resolved_start`):
 
 ```
 (seed, seed_denom) = stored_point_value(stream_id, year, ctx)
 if seed_denom is YZV:
-    result = yzv_to_ynv(seed, year, ctx.plan_ctx.cpi_factors)
+    value = yzv_to_ynv(seed, year, ctx.plan_ctx.cpi_factors)
 elif seed_denom is PNV:
-    result = seed  // already nominal
+    value = seed  // already nominal
+result = (value, Ynv { target_year: year })
 ```
+
+The base case uses `stored_point_value` on the stream's own seed point --
+this is the stream's own stored data, not an input stream evaluation.
 
 **Recurrence** (`year > resolved_start`):
 
 ```
-prev = memo.get(stream_id, year - 1)
-rate = eval(stream.inputs["rate"], year)
+prev = memo.get_prior_value(stream_id, year)
+(rate, _) = eval(stream.inputs["rate"], year, ctx, memo)
 net_flow = 0
 for (key, input_id) in stream.inputs:
     if key == "rate": continue
-    (raw_val, denom) = stored_point_value(input_id, year, ctx)
+    (val, denom) = eval(input_id, year, ctx, memo)
     if denom is YZV:
-        net_flow += yzv_to_ynv(raw_val, year, ctx.plan_ctx.cpi_factors)
+        net_flow += yzv_to_ynv(val, year, ctx.plan_ctx.cpi_factors)
     elif denom is PNV:
-        net_flow += raw_val
-result = prev * (1 + rate) + net_flow
-result = apply_balance_bound(result, stream.owner)
+        net_flow += val
+value = prev * (1 + rate) + net_flow
+value = apply_balance_bound(value, stream.owner)
+result = (value, Ynv { target_year: year })
 ```
 
-Cash-flow inputs are `Stored` streams -- `stored_point_value()` is the full
-evaluation (cursor-based carry-forward, O(1), no recursion). The tuple return
-provides both the value and its denomination from the current point. The rate
-input uses `eval()` because it may be an `Additive` effective-rate tree
-requiring recursive evaluation; rates are dimensionless and need no denomination
-conversion.
+All inputs go through `eval()`, which enforces active range and identity
+semantics. A contribution stream that terminates at retirement (via `OnEvent`)
+returns `(ZERO, Yzv)` for years past `resolved_end` -- zero converts to zero,
+so it contributes nothing to `net_flow`. The denomination on the tuple tells
+the procedure whether to apply YZV-to-YNV conversion. Rate inputs are
+dimensionless; their denomination is ignored (the `_` discard).
 
 ### AmortizedSchedule
 
-**Base case:** `result = seed` (PNV nominal principal, negative).
+**Base case:**
+
+```
+(seed, seed_denom) = stored_point_value(stream_id, year, ctx)
+result = (seed, seed_denom)  // PNV nominal principal, negative
+```
 
 **Recurrence:**
 
 ```
-prev = memo.get(stream_id, year - 1)
-r_annual = eval(stream.inputs["rate"], year)
+prev = memo.get_prior_value(stream_id, year)
+(r_annual, _) = eval(stream.inputs["rate"], year, ctx, memo)
 k = procedure.periods_per_year
 r_p = r_annual / k
-(pmt_p, _) = stored_point_value(stream.inputs["payment"], year, ctx)  // nominal, no conversion
+(pmt_p, _) = eval(stream.inputs["payment"], year, ctx, memo)  // nominal, no conversion
 extra = 0
 for (key, input_id) in stream.inputs:
     if key in ["rate", "payment"]: continue
-    (raw_val, denom) = stored_point_value(input_id, year, ctx)
+    (val, denom) = eval(input_id, year, ctx, memo)
     if denom is YZV:
-        extra += yzv_to_ynv(raw_val, year, ctx.plan_ctx.cpi_factors)
+        extra += yzv_to_ynv(val, year, ctx.plan_ctx.cpi_factors)
     elif denom is PNV:
-        extra += raw_val
+        extra += val
 if r_p == 0:
-    result = prev + pmt_p * k + extra
+    value = prev + pmt_p * k + extra
 else:
     compound = pow_decimal(1 + r_p, k)  // integer exponentiation via repeated squaring
-    result = prev * compound + pmt_p * (compound - 1) / r_p + extra
-result = min(result, 0)  // ceiling at zero for liabilities
+    value = prev * compound + pmt_p * (compound - 1) / r_p + extra
+value = min(value, 0)  // ceiling at zero for liabilities
+result = (value, Ynv { target_year: year })
 ```
+
+All inputs go through `eval()`, which enforces active range and identity
+semantics. A payment stream that terminates returns zero past its end. Extra
+cash-flow inputs (prepayments) likewise respect their active range. The
+denomination on each `eval()` return tells the procedure whether to apply
+YZV-to-YNV conversion.
 
 ### InterestOnly
 
 ```
-result = stored_point_value(stream_id, resolved_start, ctx)
+(seed, seed_denom) = stored_point_value(stream_id, resolved_start, ctx)
+result = (seed, seed_denom)
 ```
 
 The balance is constant for every active year. The stream emits the same
-nominal opening balance for each year. No iteration or denomination conversion
-is needed -- liability values are stored in nominal dollars (PNV), already in
+nominal opening balance for each year. The denomination passes through from
+the seed (PNV) -- liability values are stored in nominal dollars, already in
 YNV terms for each year.
 
 ### pow_decimal
@@ -930,15 +1007,15 @@ struct ProjectionTree {
     root_id: Uuid,                            // net-worth projection stream
     lifecycle_ids: Vec<Uuid>,                 // MemberLifecycleStream IDs
     cpi_stream_id: Uuid,                      // resolved once
-    anchor_year: i32,
-    timeline_start: i32,
-    timeline_end: i32,
 }
 ```
 
+Timeline bounds (`timeline_start`, `timeline_end`) and `anchor_year` are read
+from `PlanContext` via `EvalContext` — not duplicated on `ProjectionTree`.
+
 ### Build Steps
 
-`build_projection_tree(plan_graph, timeline_start, timeline_end) -> ProjectionTree`
+`build_projection_tree(plan_ctx: &PlanContext) -> ProjectionTree`
 
 1. Reference all plan streams (rates, contributions, CPI, allocations,
    lifecycle, relation streams) and their points by read-only reference into
@@ -967,38 +1044,63 @@ Lifecycle resolution precedes root eval in each year.
 
 ```
 memo = MemoTable::new()
-for year in timeline_start..=timeline_end:
-    // Step 1: resolve all lifecycle streams
-    for lifecycle_id in &lifecycle_ids:
-        resolve_lifecycle(lifecycle_id, year, &plan_graph, &mut memo)
+projection = Projection {
+    years: (plan_ctx.timeline_start..=plan_ctx.timeline_end).collect(),
+    root_id: tree.root_id,
+    streams: tree.streams.values().clone(),
+    points: IndexMap::new(),
+}
 
-    // Step 2: evaluate projection root (depth-first recursion)
-    eval(root_id, year, &ctx, &mut memo)
+for year in plan_ctx.timeline_start..=plan_ctx.timeline_end:
+    // Step 1: resolve all lifecycle streams
+    for lifecycle_id in &tree.lifecycle_ids:
+        resolve_lifecycle(lifecycle_id, year, &plan_ctx.graph, &mut memo)
+
+    // Step 2: evaluate projection root (depth-first recursion evaluates all reachable streams)
+    eval(tree.root_id, year, &ctx, &mut memo)
+
+    // Step 3: collect output points for this year
+    for stream in &tree.streams:
+        (value, denom) = memo.get(stream.id, year)
+        point = StreamPoint {
+            stream_id: stream.id,
+            year,
+            entries: { stream.value_schema.attributes[0].key: PointEntry { amount: value.round_dp(2), denomination: denom } },
+        }
+        projection.points[stream.id].push(point)
 ```
+
+Output points are built year by year as the sweep progresses. Rounding to 2
+decimal places is applied here — all intermediate computation in the memo
+table is full `Decimal` precision.
 
 ### eval Function
 
 ```
-fn eval(stream_id: Uuid, year: i32, ctx: &EvalContext, memo: &mut MemoTable) -> Decimal:
+fn eval(stream_id: Uuid, year: i32, ctx: &EvalContext, memo: &mut MemoTable) -> (Decimal, PointDenomination):
     if let Some(cached) = memo.get(stream_id, year):
         return cached
 
     stream = ctx.tree.streams[stream_id]
 
-    if year < resolved_start(stream, &ctx.plan_ctx.graph) or year > resolved_end(stream, &ctx.plan_ctx.graph, ctx.tree.timeline_end):
-        result = identity_value(stream, year, ctx)
+    if stream.start.is_none():
+        // Derived stream (aggregate) — no active range, always dispatch.
+        (value, denom) = dispatch(stream, stream_id, year, ctx, memo)
+    elif year < resolved_start(stream, &ctx.plan_ctx.graph) or year > resolved_end(stream, &ctx.plan_ctx.graph, ctx.plan_ctx.timeline_end):
+        (value, denom) = identity_value(stream, year, ctx)
     else:
-        result = dispatch(stream, stream_id, year, ctx, memo)
+        (value, denom) = dispatch(stream, stream_id, year, ctx, memo)
 
-    memo.set(stream_id, year, result)
-    return result
+    memo.set(stream_id, year, value, denom)
+    return (value, denom)
 ```
 
-For simple procedures (`Stored`, `Additive`, `Product`), `dispatch` evaluates
-inputs via recursive `eval` calls. For denomination-aware procedures
-(`EndOfYearGrowth`, `AmortizedSchedule`), `dispatch` evaluates inputs internally
-and applies denomination conversion as described in the Procedure Dispatch
-section.
+Every `eval` call returns both the computed value and its denomination. For
+`Stored` streams this is the denomination from the underlying `StreamPoint`
+(YZV or PNV). For computed streams (`Additive`, `Product`, `EndOfYearGrowth`,
+`AmortizedSchedule`) it is `Ynv { target_year: year }`. Consumers that need
+denomination-aware conversion (e.g., `EndOfYearGrowth` reading a cash-flow
+input) destructure the tuple and branch on the denomination.
 
 ### Cycle Detection
 
@@ -1026,7 +1128,7 @@ member age (design invariant 9).
 for each MemberLifecycleStream:
     member = plan_graph.members[stream.owner.member_id]
     age = year - member.birth_year
-    memo.set(stream_id, year, Decimal::from(age))
+    memo.set(stream_id, year, Decimal::from(age), Ynv { target_year: year })
 ```
 
 ### Output Collection
@@ -1055,22 +1157,33 @@ All dollar amounts in the plan are stored in one of two denominations:
 All projection output is **YNV** -- each point carries
 `denomination = YNV(point.year)`.
 
-Denomination is resolved per-point via the `stored_point_value()` tuple return.
-The denomination drives the conversion decision inside denomination-aware
-procedures (`EndOfYearGrowth`, `AmortizedSchedule`):
+`eval()` returns `(Decimal, PointDenomination)`. The denomination flows from
+the source: `Stored` procedure streams pass through the denomination from their
+`StreamPoint`; computed streams (`Additive`, `Product`, `EndOfYearGrowth`,
+`AmortizedSchedule`) return `Ynv { target_year: year }`. The memo table stores
+both value and denomination, so any consumer of `eval()` has the denomination
+available without a separate lookup.
+
+Denomination-aware procedures (`EndOfYearGrowth`, `AmortizedSchedule`)
+destructure the `eval()` return and branch on the denomination to determine
+conversion:
 
 - `Yzv` -> `yzv_to_ynv(value, target_year, cpi_factors)`
 - `Pnv { ref_year }` -> `value` (already nominal)
 - `Ynv { target_year }` -> `value` (already in target year's nominal)
 
-Rate inputs use `eval()` -- rates are dimensionless and need no denomination
-conversion.
+Rate inputs are dimensionless; their denomination is ignored (the `_` discard).
 
 A single stream may have points in different denominations (e.g., historical PNV
-prepayments and future YZV planned prepayments). `stored_point_value()` already
-finds the relevant point via carry-forward -- the denomination is on the same
-`PointEntry` as the value. Returning both as a tuple eliminates any need for a
-separate denomination lookup or cache.
+prepayments and future YZV planned prepayments). `stored_point_value()` finds
+the relevant point via carry-forward -- the denomination is on the same
+`PointEntry` as the value. The `Stored` procedure passes both through to
+`eval()`, and from there through the memo table to any consuming procedure.
+
+Active range enforcement is automatic: a terminated stream returns
+`identity_value`, which for `Decimal` unit is `(ZERO, Yzv)`. Zero converts to
+zero regardless of denomination, so terminated cash-flow streams contribute
+nothing to net-flow sums.
 
 ---
 
@@ -1142,7 +1255,12 @@ violations exist, each is emitted as a separate line with the full prefix.
 
 ## generate() Pipeline
 
-`generate(dir: &Path, params: GeneratePlanParams) -> Result<(), ModelError>`
+`Model::generate(dir, params)` delegates to
+`Model::generate_with(&JsonPlanStore, dir, params)`:
+
+```
+fn generate_with(store: &impl PlanStore, dir: &Path, params: GeneratePlanParams) -> Result<(), ModelError>
+```
 
 Produces a minimal projectable plan with two members, two 401k accounts, and a
 joint bank account.
@@ -1152,8 +1270,8 @@ joint bank account.
 1. Create `Plan` with `anchor_year = params.anchor_year`, derive `plan_id`.
 2. Create `Household`, derive `household_id`.
 3. Create two `Member` entities (Alice and Bob) with default ages:
-   - Alice: birth_year = anchor_year - 30, death_age = 95, role = Primary
-   - Bob: birth_year = anchor_year - 28, death_age = 95, role = Spouse
+   - Alice: birth_year = anchor_year - 35, death_age = 90, role = Primary
+   - Bob: birth_year = anchor_year - 33, death_age = 90, role = Spouse
 4. Create `LifecycleEvent` for each member: Retirement event at age 65.
 5. Create `MemberLifecycleStream` for each member.
 6. Create `RelationSpouseStream` for Alice->Bob.
@@ -1173,11 +1291,10 @@ joint bank account.
     balance = $10,000 YZV). Bank's effective rate uses bonds allocation only.
 11. Create all aggregate StreamTemplates (net-worth, assets, liabilities,
     retirement, health, taxable, hard-assets, lt-liabilities, st-liabilities)
-    per the default aggregate tree structure in
+    with `start: None` per the default aggregate tree structure in
     [data-model.md](../../design/data-model.md#aggregate-streamtemplates).
-12. Persist via `PlanStore::save(dir, plan_graph)`.
-13. Self-check: `PlanStore::load(dir)` and run validation. If validation fails,
-    this is a bug in generate -- panic with the violations.
+12. Persist via `store.save(dir, plan_graph)` (where `store` is the `PlanStore`
+    passed to `generate_with`; for the public `generate()` this is `JsonPlanStore`).
 
 ---
 
