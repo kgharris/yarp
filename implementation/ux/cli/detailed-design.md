@@ -433,7 +433,9 @@ enum JsonValue {
 Conversion:
 - `None` → `JsonValue::Null`
 - `Some(CellValue::Age(v))` → `JsonValue::Integer(v)`
-- `Some(CellValue::Money(v))` → `JsonValue::Number(v.round_dp(2).to_f64().unwrap_or(0.0))`
+- `Some(CellValue::Money(v))` → `JsonValue::Number(v.round_dp(2).to_f64().unwrap())`
+  Panics if the Decimal cannot be represented as f64. At 2dp rounding, values
+  up to ~10^13 are safe — well beyond retirement planning range.
 
 ---
 

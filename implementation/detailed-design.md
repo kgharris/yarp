@@ -66,9 +66,10 @@ yarp/
           json.rs                     # JsonPlanStore (production backend)
         engine/
           mod.rs                      # re-exports; no public surface beyond Model
+          consts.rs                   # engine-private constants (default rates, ages, balances)
           timeline.rs                 # timeline derivation (called at load time, cached on PlanContext)
           tree.rs                     # Phase 2: projection tree construction
-          eval.rs                     # Phase 3: eval(), sweep loop, MemoTable
+          eval.rs                     # Phase 3: eval(), sweep loop, prior_value
           procedures/
             mod.rs                    # dispatch() function
             stored.rs                 # Stored procedure
@@ -328,7 +329,7 @@ enum PlanStoreError {
 
 `ModelError` maps from `PlanStoreError` — each variant has a 1:1 mapping.
 `Model` converts at the facade boundary; callers above never see
-`PlanStoreError`. `SchemaVersion` is a `String`, not a `u32`.
+`PlanStoreError`. `SchemaVersion` is a `u32`, consistent with the design spec.
 
 ---
 

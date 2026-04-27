@@ -155,18 +155,13 @@ wrong with the file content.
 
 ```rust
 // store/mod.rs
-pub(crate) const SCHEMA_VERSION: &str = "1";
+pub(crate) const SCHEMA_VERSION: u32 = 1;
 ```
 
-The schema version is a `String`, not a `u32`. The
-[project detailed design](../detailed-design.md#planstoreerror) explicitly
-states: "SchemaVersion is a String, not a u32." This contradicts the design spec
-([json-plan-store.md](../../design/db/json-plan-store.md)), which shows
-`"schema_version": 1` as an integer. The project DD governs at the
-implementation level. String allows semver-style versions in the future without a
-type change.
-
-In JSON, the value serializes as the string `"1"` (not the integer `1`).
+The schema version is a `u32`, consistent with the design spec
+([json-plan-store.md](../../design/db/json-plan-store.md)) which shows
+`"schema_version": 1` as an integer. In JSON, the value serializes as the
+integer `1`.
 
 ### PlanFile Struct
 
@@ -178,7 +173,8 @@ for serialization (save).
 ```rust
 #[derive(Deserialize)]
 struct PlanFile {
-    schema_version: String,
+    #[serde(deserialize_with = "flexible_version")]
+    schema_version: u32,
     plan: PlanGraph,
 }
 ```
@@ -188,7 +184,7 @@ struct PlanFile {
 ```rust
 #[derive(Serialize)]
 struct PlanFile<'a> {
-    schema_version: &'a str,
+    schema_version: u32,
     plan: &'a PlanGraph,
 }
 ```
@@ -196,12 +192,17 @@ struct PlanFile<'a> {
 The save variant borrows `&PlanGraph` rather than cloning, avoiding a full
 graph copy on every save. Both structs are private to `store/json.rs`.
 
-The version check uses direct string comparison against the constant:
+**Flexible deserialization:** `flexible_version` is a custom serde
+deserializer that accepts both JSON integer `1` and JSON string `"1"`,
+normalizing to `u32`. This ensures hand-edited files work regardless of
+whether the user writes the version as a number or a quoted string.
+
+The version check uses direct comparison against the constant:
 
 ```rust
 if plan_file.schema_version != SCHEMA_VERSION {
     return Err(PlanStoreError::SchemaMismatch {
-        found: plan_file.schema_version,
+        found: plan_file.schema_version.to_string(),
         expected: SCHEMA_VERSION.to_string(),
     });
 }
@@ -350,7 +351,7 @@ tempfile = "3"
 
 ```json
 {
-  "schema_version": "1",
+  "schema_version": 1,
   "plan": { ... }
 }
 ```
@@ -389,7 +390,7 @@ are `None` are omitted.
 
 ```json
 {
-  "schema_version": "1",
+  "schema_version": 1,
   "plan": {
     "plan": {
       "id": "a1b2c3d4-0000-5000-8000-000000000001",
@@ -1014,9 +1015,12 @@ Model::load(dir):
     Self::load_with(&JsonPlanStore, dir)
 
 Model::load_with(store, dir):
-    let graph = store.load(dir)?;                          // returns PlanGraph
+    let mut graph = store.load(dir)?;                      // returns PlanGraph
     let (timeline_start, timeline_end) =
         engine::timeline::derive_timeline(&graph);         // engine function
+    let cpi_stream_id = engine::ensure_cpi_stream(
+        &mut graph,
+    );                                                     // engine function
     let cpi_factors = engine::convert::compute_cpi_factors(
         cpi_stream_id,
         &graph.points,
@@ -1057,71 +1061,17 @@ but is unused by either store backend in MVP.
 
 ---
 
-## Test Cases
+## DB Testing
 
 The project-wide testing strategy (TDD, coverage requirements, golden-file
 tests, PlanBuilder, rejected alternatives, rounding convention) is defined in
-the [project detailed design](../detailed-design.md#testing-strategy). This
-section lists only DB-specific test cases.
+the [project detailed design](../detailed-design.md#testing-strategy).
 
-Tests use `PlanBuilder` (defined in the
-[project detailed design](../detailed-design.md#planbuilder)) for constructing
-`PlanGraph` instances. For store tests, `PlanBuilder::build()` returns a
-`PlanGraph` directly -- no caches involved. `MemoryPlanStore::seed()` accepts
-the `PlanGraph` from `PlanBuilder::build()` directly:
-`store.seed(dir, builder.build())`.
+DB tests follow TDD: tests are written before the code they exercise.
+Scenarios, fixture data, and expected values are defined authoritatively in
+the test artifacts (inline test modules and fixture files), not in this
+document.
 
+Tests use `PlanBuilder` for constructing `PlanGraph` instances.
+`PlanBuilder::build()` returns a `PlanGraph` directly -- no caches involved.
 Use the `tempfile` crate (dev-dependency) for filesystem test isolation.
-
-Use `assert_plan_graphs_equal` helper that compares all `PlanGraph` fields. No
-exclusions needed -- `PlanGraph` contains only serializable data.
-
-### JsonPlanStore Unit Tests
-
-| Test | Description |
-|------|-------------|
-| `load_valid_plan` | Round-trip: build PlanGraph, save, load, assert equal |
-| `load_nonexistent_dir` | Returns `NotFound` |
-| `load_file_not_dir` | Path exists but is a file, returns `InvalidStore` |
-| `load_missing_plan_json` | Dir exists but no plan.json, returns `InvalidStore` |
-| `load_corrupt_json` | Invalid JSON content, returns `Io` with `InvalidData` |
-| `load_wrong_schema_version` | Returns `SchemaMismatch` with found/expected |
-| `load_sorts_points_by_year` | Points out of order in JSON, sorted after load |
-| `save_creates_directory` | Dir created, plan.json written |
-| `save_overwrites_existing` | Save to existing dir succeeds, load returns updated plan |
-| `save_missing_parent_fails` | Parent dir does not exist, returns `Io` |
-| `save_atomicity` | plan.json.tmp does not persist on success |
-| `save_trailing_newline` | Saved file ends with `\n` |
-| `round_trip_decimal_precision` | Decimal values survive serialization without precision loss |
-| `round_trip_all_enum_variants` | Every enum variant serializes and deserializes correctly |
-
-### MemoryPlanStore Unit Tests
-
-| Test | Description |
-|------|-------------|
-| `load_empty_store` | Returns `NotFound` |
-| `seed_then_load` | Seeded plan is returned by load |
-| `save_then_load` | Saved plan is returned by load |
-| `save_overwrites_existing` | Second save to same path overwrites, load returns updated plan |
-| `load_returns_clone` | Mutating loaded plan does not affect stored copy |
-| `save_stores_clone` | Mutating original after save does not affect stored copy |
-| `multiple_paths` | Save to path A, save to path B, load each independently |
-
-### Integration Tests
-
-In `tests/generate_tests.rs`:
-
-| Test | Description |
-|------|-------------|
-| `generate_round_trip` | generate() -> load() -> validate() -> project() succeeds |
-| `generate_self_check` | generate() internal save-then-load self-check passes |
-| `generate_overwrites_existing` | generate() to existing directory overwrites successfully |
-| `load_generated_plan_projects` | Generated plan produces valid projection output |
-
-### Property-Based Test
-
-Using proptest:
-
-| Test | Description |
-|------|-------------|
-| `round_trip_identity` | For any valid PlanGraph, `load(save(plan)) == plan` |

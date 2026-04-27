@@ -1,6 +1,6 @@
 # Engine — Model Facade API
 
-The `Model` trait is the sole entry point into the Model layer for all callers
+The `Model` facade is the sole entry point into the Model layer for all callers
 — the CLI, the Controller, and test harnesses. No caller ever holds a reference
 to `JsonPlanStore`, `MemoryPlanStore`, or any other backend directly.
 
@@ -109,35 +109,28 @@ defined in [design/error-handling.md](../error-handling.md).
 
 ## Construction
 
-`Model` receives its `PlanStore` implementation at construction time — it never
-selects or instantiates a backend itself. In Rust, this is expressed as a
-generic over the store type (static dispatch, zero runtime cost):
+`Model` is a stateless unit struct used as a namespace for associated functions.
+It holds no fields and is never instantiated. The production store
+(`JsonPlanStore`) is used internally by the default `load()` and `generate()`
+methods. Test entry points (`load_with`, `generate_with`) accept any `PlanStore`
+implementation as a parameter.
 
-```
-Model<S: PlanStore> {
-    store: S,
-}
-
-Model::new(store: S) -> Model<S>
-```
-
-The caller supplies the concrete type:
+This prevents type-surface leakage: callers see `Model`, not
+`Model<JsonPlanStore>`. The `PlanStore` trait, its implementations, and the
+store type parameter are invisible above the facade. Swapping backends requires
+no caller changes because callers never named the backend in the first place.
 
 ```
 -- CLI (production):
-let model = Model::new(JsonPlanStore);
+Model::load(dir)              -- uses JsonPlanStore internally
 
 -- Test harness:
-let model = Model::new(MemoryPlanStore::new());
+Model::load_with(&store, dir) -- accepts any PlanStore
 ```
-
-`Model` only ever calls `store.load()` and `store.save()` through the
-`PlanStore` trait. It has no knowledge of which backend it holds beyond what
-the trait exposes.
 
 MVP data flow:
 
 ```
-yarp-cli  →  Model<JsonPlanStore>  →  JsonPlanStore (load/save)
-                                   →  Engine (get_projection)  →  stdout
+yarp-cli  →  Model::load / generate  →  JsonPlanStore (load/save)
+             Model::get_projection   →  Engine (projection)  →  stdout
 ```

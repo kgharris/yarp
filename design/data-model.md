@@ -101,7 +101,7 @@ Stream {
     kind:         StreamKind,
     label:        Option<string>,
     owner:        OwnedBy,
-    start:        StreamStart,             -- when the stream becomes active
+    start:        Option<StreamStart>,      -- when the stream becomes active; None for derived/aggregate streams
     terminates:   Option<TerminationRef>,  -- None = ends at natural bound (see Stream Lifecycle)
     inputs:       Map<string, Uuid>,       -- named external stream references consumed by procedure; slot names defined by procedure
     procedure:    StreamProcedure,         -- computation functor; see Stream Kind Registry
@@ -133,11 +133,13 @@ multiple years and are consumed directly during evaluation.
 - `owner` — typed discriminant pointing to the entity that owns this stream.
   The type is known from `kind` and is structurally enforced — not implied by
   convention. See [OwnedBy](#ownedby) below.
-- `start` — the first year for which the stream emits real values. For years
-  outside the active range, or years within it that have no explicit anchor point,
-  the stream emits its identity value per [Identity Semantics](#identity-semantics)
-  below. Consumers never branch on whether a stream is active — they iterate
-  and aggregate what the stream emits.
+- `start` — the first year for which the stream emits real values. `None` for
+  derived/aggregate streams, which have no independent lifecycle — they are
+  always evaluated and their activity is determined entirely by their children.
+  When `Some`, the stream has an active range; for years outside that range it
+  emits its identity value per [Identity Semantics](#identity-semantics) below.
+  Consumers never branch on whether a stream is active — they iterate and
+  aggregate what the stream emits.
 - `terminates` — if set, the stream ends when the referenced `LifecycleEvent`
   fires. If `None`, the end is derived from the ownership chain per the Stream
   Lifecycle rules.
@@ -1190,9 +1192,12 @@ buckets — it reads the aggregate templates from the plan and evaluates them
 uniformly.
 
 There are no special aggregate types — an aggregate is simply an `Additive`
-`StreamTemplate` whose `inputs` reference other streams. This extends to
-user-defined aggregates: any `Additive` `StreamTemplate` wired to whatever child
-streams the user chooses is a valid aggregate node.
+`StreamTemplate` with `start: None` whose `inputs` reference other streams.
+`start: None` signals that the aggregate has no independent lifecycle — it is
+always evaluated and its activity is determined entirely by its children. This
+extends to user-defined aggregates: any `Additive` `StreamTemplate` with
+`start: None` wired to whatever child streams the user chooses is a valid
+aggregate node.
 
 The default MVP aggregate tree (created by `generate()`):
 
@@ -1433,9 +1438,11 @@ p(2027) = $11,670 × 1.064 + $1,071.20 = $13,488.08   [YNV(2027)]
     with `MemberRole = Primary` or `MemberRole = Spouse` in the household. At
     most one spousal pair is permitted per plan.
 
-11. A `StreamTemplate`'s `start` year must be `>=` the year of its seed
-    `StreamPoint`. The projection starts at `resolved_start`; the seed must
-    exist at or before that year for the base case to resolve.
+11. Every `Stored` stream with `start: Some(...)` must have its earliest
+    `StreamPoint` at a year `<=` `resolved_start`. This ensures the cursor
+    always has a valid point at or before the stream's active range — for
+    `StreamTemplate`s (where the seed must exist for the base case) and for
+    plain `Stored` streams (contributions, rate streams) alike.
 
 12. Every `AttributeDef` with a carry-forward unit (`Rate`, `Count`, `Years`,
     or `Age`) must have a non-`None` `initial` value. This is a plan-construction

@@ -30,6 +30,7 @@ modules are:
 ```
 engine/
   mod.rs                      # re-exports; no public surface beyond Model
+  consts.rs                   # engine-private constants (default rates, ages, balances)
   timeline.rs                 # timeline derivation (called at load time, cached on PlanContext)
   tree.rs                     # Phase 2: projection tree construction
   eval.rs                     # Phase 3: eval(), sweep loop, prior_value
@@ -529,16 +530,35 @@ struct Projection {
 }
 ```
 
-`Projection` is both the output of `get_projection()` and the computation
-workspace during the sweep. `eval()` writes results directly into `points`
-as it goes — the projection is the table being filled in, not a copy of a
-separate cache. It contains the ephemeral projection `Stream`s (created from
-`StreamTemplate`s) and the resolved `MemberLifecycleStream` records. Callers
-navigate by filtering on `stream.label` and `stream.owner`.
+`Projection` is the public output of `get_projection()`. It contains the
+ephemeral projection `Stream`s (created from `StreamTemplate`s) and the
+resolved `MemberLifecycleStream` records. Callers navigate by filtering on
+`stream.label` and `stream.owner`.
 
 Active-range points carry `denomination = Ynv { target_year: year }`.
 Identity points (outside the stream's active range) carry
 `denomination = Idv`.
+
+### ProjectionContext
+
+```rust
+struct ProjectionContext {
+    projection: Projection,
+    cursors: HashMap<Uuid, usize>,                // carry-forward cursor position per stream
+}
+```
+
+`ProjectionContext` is the computation workspace during the sweep. It wraps
+`Projection` with sweep-local state that callers never see. `eval()` writes
+results into `projection.points` and advances cursors as needed.
+`stored_point_value` reads and advances the cursor for its stream via
+`ctx.cursors`. Cursors are initialized to 0 at sweep start.
+
+When the sweep completes, `get_projection()` returns
+`projection_ctx.projection` — the `ProjectionContext` wrapper and its cursors
+are discarded. This mirrors the `PlanContext` / `PlanGraph` separation: the
+context holds derived computation state; the inner struct is the clean public
+output.
 
 ### GeneratePlanParams
 
@@ -547,6 +567,63 @@ struct GeneratePlanParams {
     anchor_year: i32,
 }
 ```
+
+---
+
+## CPI Stream Guarantee
+
+`Model::load_with` calls `ensure_cpi_stream` before computing CPI factors.
+This function guarantees a CPI stream exists on the graph, creating a default
+one if absent. After this call, `compute_cpi_factors` can proceed without
+guarding against a missing stream.
+
+### ensure_cpi_stream
+
+```rust
+fn ensure_cpi_stream(graph: &mut PlanGraph) -> Uuid {
+    let cpi_id = stream_id(graph.plan.id, "cpi");
+    if graph.streams.contains_key(&cpi_id) {
+        return cpi_id;
+    }
+    // CPI stream missing — create a default one
+    let stream = Stream {
+        id: cpi_id,
+        kind: StreamKind::RateStream,
+        label: Some("cpi".to_string()),
+        owner: OwnedBy::Plan(graph.plan.id),
+        start: Some(StreamStart::CalendarYear(graph.plan.anchor_year)),
+        terminates: None,
+        inputs: IndexMap::new(),
+        procedure: StreamProcedure::Stored,
+        value_schema: ValueSchema {
+            attributes: vec![AttributeDef {
+                key: "value".to_string(),
+                unit: ValueUnit::Rate,
+                initial: Some(DEFAULT_CPI_RATE),
+            }],
+        },
+    };
+    let point = StreamPoint {
+        stream_id: cpi_id,
+        year: graph.plan.anchor_year,
+        entries: IndexMap::from([(
+            "value".to_string(),
+            PointEntry {
+                amount: DEFAULT_CPI_RATE,
+                denomination: PointDenomination::Yzv,
+            },
+        )]),
+    };
+    graph.streams.insert(cpi_id, stream);
+    graph.points.insert(cpi_id, vec![point]);
+    cpi_id
+}
+```
+
+This uses `DEFAULT_CPI_RATE` from `engine/consts.rs`. The created stream is
+structurally identical to the one `generate()` produces. Plans loaded from
+hand-edited JSON that omit the CPI stream get a sensible default rather than
+a panic.
 
 ---
 
@@ -619,7 +696,7 @@ fn compute_cpi_factors(
     // Backward pass: anchor_year-1 ..= timeline_start (descending)
     cumulative = Decimal::ONE;
     for year in (timeline_start..anchor_year).rev() {
-        let cpi_rate = carry_forward_value(cpi_stream_id, year, points);
+        let cpi_rate = carry_backward_value(cpi_stream_id, year, points);
         cumulative /= Decimal::ONE + cpi_rate;
         factors[(year - timeline_start) as usize] = cumulative;
     }
@@ -632,6 +709,15 @@ fn compute_cpi_factors(
 carry-forward semantics on the CPI stream's points (most recent point at or
 before the query year). This is the same resolution logic used by the `Stored`
 procedure but called directly on the points vec -- no eval machinery needed.
+
+`carry_backward_value` is the reverse: it resolves the nearest point at or
+after the query year. Used only in the backward pass, where the sweep moves
+from `anchor_year - 1` down to `timeline_start`. The CPI stream's earliest
+stored point is at `anchor_year`, so carry-backward naturally finds it for
+all pre-anchor years. If additional CPI points exist between `timeline_start`
+and `anchor_year` (e.g., historical CPI rates), the nearest future point is
+used — mirroring carry-forward's "nearest past point" semantics in the
+opposite direction.
 
 **Backward deflation:** For years before `anchor_year`, the factor is the
 reciprocal of the cumulative inflation from that year to `anchor_year`. If
@@ -671,8 +757,9 @@ return current point's (value, denomination)
 ```
 
 No binary search, no linear scan. The cursor advances at most once per point
-over the stream's lifetime. Cursors are initialized at the start of the sweep
-and are projection-local state (not stored on the plan).
+over the stream's lifetime. Cursors live in `ProjectionContext.cursors`,
+initialized to 0 at sweep start and discarded when `get_projection()` returns
+the inner `Projection`.
 
 ### stored_point_value
 
@@ -684,9 +771,11 @@ fn stored_point_value(
     stream_id: Uuid,
     year: i32,
     ctx: &EvalContext,
+    proj_ctx: &mut ProjectionContext,
 ) -> (Decimal, PointDenomination)
 ```
 
+Reads and advances the cursor for this stream via `proj_ctx.cursors`.
 Both fields are read from the same `PointEntry`. The denomination flows
 through `eval()` into `Projection.points`, so consumers of `eval()` receive
 both the value and its denomination without a separate lookup.
@@ -768,7 +857,7 @@ fn dispatch(
     stream_id: Uuid,
     year: i32,
     ctx: &EvalContext,
-    projection: &mut Projection,
+    proj_ctx: &mut ProjectionContext,
 ) -> (Decimal, PointDenomination)
 ```
 
@@ -854,6 +943,8 @@ for (key, input_id) in stream.inputs:
         net_flow += yzv_to_ynv(val, year, ctx.plan_ctx.cpi_factors)
     elif denom is PNV or denom is YNV:
         net_flow += val  // already nominal
+    elif denom is Idv:
+        // identity — stream is inactive; skip (contributes nothing)
 value = prev * (1 + rate) + net_flow
 value = apply_balance_bound(value, stream.owner)
 result = (value, Ynv { target_year: year })
@@ -895,6 +986,8 @@ for (key, input_id) in stream.inputs:
         extra += yzv_to_ynv(val, year, ctx.plan_ctx.cpi_factors)
     elif denom is PNV or denom is YNV:
         extra += val  // already nominal
+    elif denom is Idv:
+        // identity — stream is inactive; skip (contributes nothing)
 if r_p == 0:
     value = prev + pmt_p * k + extra
 else:
@@ -1004,36 +1097,40 @@ from `PlanContext` via `EvalContext` — not duplicated on `ProjectionTree`.
 
 ## The eval() Loop
 
-Cached recursive evaluation. The `Projection` is both the output and the
-computation workspace — `eval()` writes results directly into
-`Projection.points`. Outer year loop, inner depth-first recursion. Lifecycle
-resolution precedes root eval in each year.
+Cached recursive evaluation. `eval()` writes results directly into
+`ProjectionContext.projection.points`. Outer year loop, inner depth-first
+recursion. Lifecycle resolution precedes root eval in each year.
 
 ### Sweep Loop
 
 ```
-projection = Projection {
-    years: (plan_ctx.timeline_start..=plan_ctx.timeline_end).collect(),
-    root_id: tree.root_id,
-    streams: projection_stream_ids.iter()
-        .map(|id| (*id, tree.streams[id].clone())).collect(),
-    points: IndexMap::new(),
+proj_ctx = ProjectionContext {
+    projection: Projection {
+        years: (plan_ctx.timeline_start..=plan_ctx.timeline_end).collect(),
+        root_id: tree.root_id,
+        streams: projection_stream_ids.iter()
+            .map(|id| (*id, tree.streams[id].clone())).collect(),
+        points: IndexMap::new(),
+    },
+    cursors: HashMap::new(),
 }
 
 for year in plan_ctx.timeline_start..=plan_ctx.timeline_end:
     // Step 1: resolve all lifecycle streams
     for lifecycle_id in &tree.lifecycle_ids:
-        resolve_lifecycle(lifecycle_id, year, &plan_ctx.graph, &mut projection)
+        resolve_lifecycle(lifecycle_id, year, &plan_ctx.graph, &mut proj_ctx)
 
     // Step 2: evaluate projection root (depth-first recursion evaluates all reachable streams)
-    eval(tree.root_id, year, &ctx, &mut projection)
+    eval(tree.root_id, year, &ctx, &mut proj_ctx)
+
+return proj_ctx.projection
 ```
 
-`eval()` writes each result into `projection.points` as it is computed.
-There is no separate output collection step. Plan-level `Stored` streams
-(rates, contributions, CPI, allocation weights) are evaluated during the
-sweep (they appear in `tree.streams` so `eval` can resolve them) but their
-results are also written to `projection.points` — they serve as the
+`eval()` writes each result into `proj_ctx.projection.points` as it is
+computed. There is no separate output collection step. Plan-level `Stored`
+streams (rates, contributions, CPI, allocation weights) are evaluated during
+the sweep (they appear in `tree.streams` so `eval` can resolve them) but
+their results are also written to `projection.points` — they serve as the
 computation cache. The `Projection.streams` map contains only projection
 and lifecycle streams, so callers can distinguish output streams from
 intermediate cached values by checking membership in `streams`.
@@ -1044,26 +1141,26 @@ Rounding to 2 decimal places is applied when building the output
 ### eval Function
 
 ```
-fn eval(stream_id: Uuid, year: i32, ctx: &EvalContext, projection: &mut Projection) -> (Decimal, PointDenomination):
-    if let Some(cached) = get_point(projection, stream_id, year):
+fn eval(stream_id: Uuid, year: i32, ctx: &EvalContext, proj_ctx: &mut ProjectionContext) -> (Decimal, PointDenomination):
+    if let Some(cached) = get_point(&proj_ctx.projection, stream_id, year):
         return cached
 
     stream = ctx.tree.streams[stream_id]
 
     if stream.start.is_none():
         // Derived stream (aggregate) — no active range, always dispatch.
-        (value, denom) = dispatch(stream, stream_id, year, ctx, projection)
+        (value, denom) = dispatch(stream, stream_id, year, ctx, proj_ctx)
     elif year < resolved_start(stream, &ctx.plan_ctx.graph) or year > resolved_end(stream, &ctx.plan_ctx.graph, ctx.plan_ctx.timeline_end):
         (value, denom) = identity_value(stream, year, ctx)
     else:
-        (value, denom) = dispatch(stream, stream_id, year, ctx, projection)
+        (value, denom) = dispatch(stream, stream_id, year, ctx, proj_ctx)
 
-    write_point(projection, stream_id, year, value, denom)
+    write_point(&mut proj_ctx.projection, stream_id, year, value, denom)
     return (value, denom)
 ```
 
-`get_point` reads the value and denomination from `projection.points` for
-the given `(stream_id, year)`. `write_point` appends a `StreamPoint` to
+`get_point` reads the value and denomination from `proj_ctx.projection.points`
+for the given `(stream_id, year)`. `write_point` appends a `StreamPoint` to
 the stream's points vec. For projection streams (in `projection.streams`),
 the written point is rounded to 2dp. For intermediate streams (rates,
 contributions), full precision is preserved — these values are read back
@@ -1080,11 +1177,15 @@ branch on the denomination.
 ### prior_value
 
 ```rust
-fn prior_value(projection: &Projection, stream_id: Uuid, year: i32) -> Option<Decimal>
+fn prior_value(projection: &Projection, stream_id: Uuid, year: i32) -> Decimal
 ```
 
 Returns the value from the previous entry in this stream's points vec —
-the entry written during the prior year's sweep iteration. This is how
+the entry written during the prior year's sweep iteration. Panics if the
+prior entry is missing — p(y-1) is guaranteed to exist by construction
+(the sweep evaluates years in ascending order and the base case writes the
+first entry before any recurrence). A missing prior entry indicates a bug
+in sweep ordering, not a data error. This is how
 recurrence formulas access `p(y-1)`.
 
 ### Cycle Detection
@@ -1192,8 +1293,11 @@ Numbering matches
 9. (runtime) -- lifecycle streams resolved before dependents.
 10. `check_spousal_relationship` -- at most one spousal pair; requires exactly
     two members with Primary/Spouse roles.
-11. `check_template_seed_year` -- StreamTemplate start year >= year of its seed
-    StreamPoint.
+11. `check_stored_seed_year` -- every `Stored` stream with `start: Some(...)`
+    must have its earliest `StreamPoint` at a year `<=` `resolved_start`. This
+    generalizes the original template-only check to all `Stored` streams
+    (contributions, rate streams, etc.), ensuring the cursor always has a
+    valid point at or before the stream's active range.
 12. `check_carry_forward_initial` -- every AttributeDef with carry-forward unit
     has non-None initial.
 13. `check_unique_stream_points` -- (stream_id, year) unique across all points.
@@ -1228,6 +1332,45 @@ violations exist, each is emitted as a separate line with the full prefix.
 
 ---
 
+## Engine Constants
+
+`engine/consts.rs` holds engine-private constants used by `generate()` and
+`compute_cpi_factors`. No magic numbers in generate logic.
+
+```rust
+// engine/consts.rs
+
+// CPI default — used by compute_cpi_factors when no CPI stream exists
+pub(crate) const DEFAULT_CPI_RATE: Decimal = dec!(0.03);
+
+// Return rate defaults
+pub(crate) const DEFAULT_RETURN_LARGE_CAP: Decimal = dec!(0.08);
+pub(crate) const DEFAULT_RETURN_SMALL_CAP: Decimal = dec!(0.09);
+pub(crate) const DEFAULT_RETURN_INTERNATIONAL: Decimal = dec!(0.07);
+pub(crate) const DEFAULT_RETURN_BONDS: Decimal = dec!(0.04);
+
+// Allocation weight defaults
+pub(crate) const DEFAULT_WEIGHT_LARGE_CAP: Decimal = dec!(0.40);
+pub(crate) const DEFAULT_WEIGHT_SMALL_CAP: Decimal = dec!(0.10);
+pub(crate) const DEFAULT_WEIGHT_INTERNATIONAL: Decimal = dec!(0.10);
+pub(crate) const DEFAULT_WEIGHT_BONDS: Decimal = dec!(0.40);
+
+// Account balance defaults
+pub(crate) const DEFAULT_OPENING_BALANCE_401K: Decimal = dec!(50000);
+pub(crate) const DEFAULT_OPENING_BALANCE_BANK: Decimal = dec!(10000);
+pub(crate) const DEFAULT_EMPLOYEE_CONTRIBUTION: Decimal = dec!(5000);
+pub(crate) const DEFAULT_EMPLOYER_CONTRIBUTION: Decimal = dec!(2500);
+
+// Member defaults
+pub(crate) const DEFAULT_DEATH_AGE: i32 = 90;
+pub(crate) const DEFAULT_RETIREMENT_AGE: i32 = 65;
+pub(crate) const DEFAULT_PRIMARY_BIRTH_OFFSET: i32 = 35;
+pub(crate) const DEFAULT_SPOUSE_BIRTH_OFFSET: i32 = 33;
+pub(crate) const DEFAULT_EMPLOYMENT_START_AGE: i32 = 22;
+```
+
+---
+
 ## generate() Pipeline
 
 `Model::generate(dir, params)` delegates to
@@ -1238,38 +1381,47 @@ fn generate_with(store: &impl PlanStore, dir: &Path, params: GeneratePlanParams)
 ```
 
 Produces a minimal projectable plan with two members, two 401k accounts, and a
-joint bank account.
+joint bank account. All numeric values are sourced from `engine/consts.rs`.
 
 ### Steps
 
 1. Create `Plan` with `anchor_year = params.anchor_year`, derive `plan_id`.
 2. Create `Household`, derive `household_id`.
 3. Create two `Member` entities (Alice and Bob) with default ages:
-   - Alice: birth_year = anchor_year - 35, death_age = 90, role = Primary
-   - Bob: birth_year = anchor_year - 33, death_age = 90, role = Spouse
-4. Create `LifecycleEvent` for each member: Retirement event at age 65.
+   - Alice: birth_year = anchor_year - `DEFAULT_PRIMARY_BIRTH_OFFSET`,
+     death_age = `DEFAULT_DEATH_AGE`, role = Primary
+   - Bob: birth_year = anchor_year - `DEFAULT_SPOUSE_BIRTH_OFFSET`,
+     death_age = `DEFAULT_DEATH_AGE`, role = Spouse
+4. Create `LifecycleEvent` for each member: Retirement event at age
+   `DEFAULT_RETIREMENT_AGE`.
 5. Create `MemberLifecycleStream` for each member.
 6. Create `RelationSpouseStream` for Alice->Bob.
-7. Create plan-level assumption streams:
-   - CPI RateStream (label="cpi", rate=0.03)
-   - 4 return rate streams (large-cap=0.08, small-cap=0.09, international=0.07,
-     bonds=0.04)
-   - 4 allocation weight streams (large-cap=0.40, small-cap=0.10,
-     international=0.10, bonds=0.40)
+7. Create plan-level assumption streams. Each `RateStream` `AttributeDef` sets
+   `initial: Some(<rate>)` matching the seed point value:
+   - CPI RateStream (label="cpi", rate=`DEFAULT_CPI_RATE`)
+   - 4 return rate streams (large-cap=`DEFAULT_RETURN_LARGE_CAP`,
+     small-cap=`DEFAULT_RETURN_SMALL_CAP`,
+     international=`DEFAULT_RETURN_INTERNATIONAL`,
+     bonds=`DEFAULT_RETURN_BONDS`)
+   - 4 allocation weight streams (large-cap=`DEFAULT_WEIGHT_LARGE_CAP`,
+     small-cap=`DEFAULT_WEIGHT_SMALL_CAP`,
+     international=`DEFAULT_WEIGHT_INTERNATIONAL`,
+     bonds=`DEFAULT_WEIGHT_BONDS`)
 8. Create `WeightedReturn` Product streams for each asset class.
 9. Create two 401k `Account` entities (one per member):
    - Each with: effective rate root (Additive), balance DollarStream
      (EndOfYearGrowth, start = CalendarYear(anchor_year)), employee
-     contribution DollarStream (Stored, $5000 YZV,
-     start = MemberAge(member_id, age: 22),
+     contribution DollarStream (Stored, `DEFAULT_EMPLOYEE_CONTRIBUTION` YZV,
+     start = MemberAge(member_id, age: `DEFAULT_EMPLOYMENT_START_AGE`),
      terminates = OnEvent(retirement_event_id)), employer contribution
-     DollarStream (Stored, $2500 YZV,
-     start = MemberAge(member_id, age: 22),
+     DollarStream (Stored, `DEFAULT_EMPLOYER_CONTRIBUTION` YZV,
+     start = MemberAge(member_id, age: `DEFAULT_EMPLOYMENT_START_AGE`),
      terminates = OnEvent(retirement_event_id)). Opening
-     balance = $50,000 YZV.
+     balance = `DEFAULT_OPENING_BALANCE_401K` YZV.
 10. Create a joint `Bank` account with balance stream (EndOfYearGrowth, opening
-    balance = $10,000 YZV). Bank's effective rate root references all four
-    plan-level weighted-return streams, same as the 401k accounts.
+    balance = `DEFAULT_OPENING_BALANCE_BANK` YZV). Bank's effective rate root
+    references all four plan-level weighted-return streams, same as the 401k
+    accounts.
 11. Create all aggregate StreamTemplates (net-worth, assets, liabilities,
     retirement, health, taxable, hard-assets, lt-liabilities, st-liabilities)
     with `start: None` per the default aggregate tree structure in
@@ -1329,41 +1481,19 @@ CLI integration is defined in the
 
 ---
 
-## Engine Test Cases
+## Engine Testing
 
 The project-wide testing strategy (TDD, coverage requirements, golden-file
 tests, PlanBuilder, rejected alternatives, rounding convention) is defined
 in the [project detailed design](../detailed-design.md#testing-strategy).
-This section lists only engine-specific test cases.
+
+Engine tests follow TDD: tests are written before the code they exercise.
+Scenarios, fixture data, and expected values are defined authoritatively in
+the test artifacts (TOML fixtures and inline test modules), not in this
+document.
 
 ### Critical Branches
 
 Branch-decision coverage (both arms exercised) is required for: procedure
 dispatch, denomination conversion, carry-forward cursor advancement, balance
 bounding, and active range resolution.
-
-### Property-Based Tests (proptest)
-
-- Additive commutativity: reordering inputs produces the same sum.
-- EndOfYearGrowth monotonicity: positive rate and positive contributions produce
-  increasing balances.
-- AmortizedSchedule convergence: balance approaches zero over the amortization
-  term.
-- Balance bounds: asset balances never go negative; liability balances never go
-  positive.
-- CPI product identity: cumulative factor at anchor_year is 1.0.
-- Allocation weight identity: weights summing to 1.0 produce a valid effective
-  rate.
-
-### Integration Test Scenarios
-
-Each scenario below becomes a data-driven golden-file test case:
-
-- Single account, no contributions, fixed rate
-- Single account with contributions (the canonical example)
-- Amortized loan payoff over 30 years
-- Credit line with payments
-- Interest-only loan
-- Multi-entity net worth aggregation
-- Lifecycle-dependent contribution termination at retirement
-- Vehicle depreciation with balance floor at zero
