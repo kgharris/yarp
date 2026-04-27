@@ -466,7 +466,7 @@ Formatter tests call `header()`, `row()`, `finish()` with hand-constructed
 `CellValue` slices, using `Vec<u8>` as the `Write` target for byte-exact
 comparison. No engine types needed.
 
-**Integration tests** (`crates/yarp-core/tests/cli_tests.rs`):
+**Integration tests** (`crates/yarp-cli/tests/cli_tests.rs`):
 
 - Golden-file tests: generate a plan, project as CSV/JSON/table, compare
   against reference output

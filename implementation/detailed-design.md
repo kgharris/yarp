@@ -100,7 +100,6 @@ yarp/
         projection_tests.rs           # data-driven golden-file tests for projection scenarios
         validation_tests.rs           # invalid-plan fixtures exercising each validator
         generate_tests.rs             # generate -> load -> validate -> project round-trip
-        cli_tests.rs                  # CLI output format verification (table, CSV, JSON)
       tests/fixtures/                   # data-driven test cases
         canonical-example.toml        # inputs for the data-model numerical example
         canonical-example.expected    # hand-verified expected results
@@ -113,6 +112,8 @@ yarp/
       Cargo.toml
       src/
         main.rs                       # clap arg parsing, mode dispatch, output formatting
+      tests/
+        cli_tests.rs                  # CLI output format verification (table, CSV, JSON)
 ```
 
 **Unit tests** live inline in each source module as `#[cfg(test)] mod tests`.

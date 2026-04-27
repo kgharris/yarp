@@ -610,9 +610,6 @@ are `None` are omitted.
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
         },
-        "start": {
-          "CalendarYear": 2025
-        },
         "inputs": {
           "assets": "a1b2c3d4-0000-5000-8000-000000000051",
           "liabilities": "a1b2c3d4-0000-5000-8000-000000000054"
@@ -630,9 +627,6 @@ are `None` are omitted.
         "label": "assets",
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
-        },
-        "start": {
-          "CalendarYear": 2025
         },
         "inputs": {
           "retirement": "a1b2c3d4-0000-5000-8000-000000000052",
@@ -654,9 +648,6 @@ are `None` are omitted.
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
         },
-        "start": {
-          "CalendarYear": 2025
-        },
         "inputs": {
           "Alice 401k": "a1b2c3d4-0000-5000-8000-000000000036"
         },
@@ -673,9 +664,6 @@ are `None` are omitted.
         "label": "liabilities",
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
-        },
-        "start": {
-          "CalendarYear": 2025
         },
         "inputs": {
           "lt-liabilities": "a1b2c3d4-0000-5000-8000-000000000055",
@@ -695,9 +683,6 @@ are `None` are omitted.
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
         },
-        "start": {
-          "CalendarYear": 2025
-        },
         "inputs": {},
         "procedure": "Additive",
         "value_schema": {
@@ -712,9 +697,6 @@ are `None` are omitted.
         "label": "st-liabilities",
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
-        },
-        "start": {
-          "CalendarYear": 2025
         },
         "inputs": {},
         "procedure": "Additive",
@@ -731,9 +713,6 @@ are `None` are omitted.
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
         },
-        "start": {
-          "CalendarYear": 2025
-        },
         "inputs": {},
         "procedure": "Additive",
         "value_schema": {
@@ -749,9 +728,6 @@ are `None` are omitted.
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
         },
-        "start": {
-          "CalendarYear": 2025
-        },
         "inputs": {},
         "procedure": "Additive",
         "value_schema": {
@@ -766,9 +742,6 @@ are `None` are omitted.
         "label": "hard-assets",
         "owner": {
           "Plan": "a1b2c3d4-0000-5000-8000-000000000001"
-        },
-        "start": {
-          "CalendarYear": 2025
         },
         "inputs": {},
         "procedure": "Additive",
@@ -1024,7 +997,9 @@ caches:
 ```rust
 struct PlanContext {
     graph: PlanGraph,
-    cpi_factors: CpiFactors,
+    timeline_start: i32,      // min(member.birth_year) — precomputed at load time
+    timeline_end: i32,        // max(member.birth_year + member.death_age) — precomputed at load time
+    cpi_factors: CpiFactors,  // precomputed at load time
 }
 ```
 

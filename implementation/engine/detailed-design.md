@@ -911,7 +911,7 @@ dimensionless; their denomination is ignored (the `_` discard).
 
 ```
 (seed, seed_denom) = stored_point_value(stream_id, year, ctx)
-result = (seed, seed_denom)  // PNV nominal principal, negative
+result = (seed, Ynv { target_year: year })  // PNV nominal principal, negative; tag as YNV
 ```
 
 **Recurrence:**
@@ -949,13 +949,14 @@ YZV-to-YNV conversion.
 
 ```
 (seed, seed_denom) = stored_point_value(stream_id, resolved_start, ctx)
-result = (seed, seed_denom)
+result = (seed, Ynv { target_year: year })
 ```
 
 The balance is constant for every active year. The stream emits the same
-nominal opening balance for each year. The denomination passes through from
-the seed (PNV) -- liability values are stored in nominal dollars, already in
-YNV terms for each year.
+nominal opening balance for each year. The PNV seed value is already in
+nominal dollars -- numerically correct for each year's YNV. The
+denomination tag is set to `Ynv` (not passed through as PNV) so that
+projection output satisfies design invariant 3.
 
 ### pow_decimal
 
@@ -1044,10 +1045,16 @@ Lifecycle resolution precedes root eval in each year.
 
 ```
 memo = MemoTable::new()
+// projection_stream_ids: streams created from templates + lifecycle streams
+// (excludes plan-level Stored streams: rates, contributions, CPI, allocation weights)
+projection_stream_ids = tree.streams.keys()
+    .filter(|id| is_projection_or_lifecycle_stream(id, &tree))
+    .collect()
+
 projection = Projection {
     years: (plan_ctx.timeline_start..=plan_ctx.timeline_end).collect(),
     root_id: tree.root_id,
-    streams: tree.streams.values().clone(),
+    streams: projection_stream_ids.iter().map(|id| tree.streams[id].clone()).collect(),
     points: IndexMap::new(),
 }
 
@@ -1059,16 +1066,27 @@ for year in plan_ctx.timeline_start..=plan_ctx.timeline_end:
     // Step 2: evaluate projection root (depth-first recursion evaluates all reachable streams)
     eval(tree.root_id, year, &ctx, &mut memo)
 
-    // Step 3: collect output points for this year
-    for stream in &tree.streams:
-        (value, denom) = memo.get(stream.id, year)
+    // Step 3: collect output points for this year (projection and lifecycle streams only)
+    for stream_id in &projection_stream_ids:
+        stream = tree.streams[stream_id]
+        (value, denom) = memo.get(stream_id, year)
         point = StreamPoint {
-            stream_id: stream.id,
+            stream_id: stream_id,
             year,
             entries: { stream.value_schema.attributes[0].key: PointEntry { amount: value.round_dp(2), denomination: denom } },
         }
-        projection.points[stream.id].push(point)
+        projection.points[stream_id].push(point)
 ```
+
+Output points are collected only for projection streams (created from
+templates) and lifecycle streams -- not for plan-level `Stored` streams
+(rates, contributions, CPI, allocation weights). These plan streams are
+evaluated during the sweep (they appear in `tree.streams` so `eval` can
+resolve them) but are not part of the `Projection` output per
+[api.md](../../design/engine/api.md#projection). The
+`is_projection_or_lifecycle_stream` filter identifies streams by checking
+whether they were created from a `StreamTemplate` during tree construction
+or have `kind = MemberLifecycleStream`.
 
 Output points are built year by year as the sweep progresses. Rounding to 2
 decimal places is applied here — all intermediate computation in the memo
@@ -1284,8 +1302,13 @@ joint bank account.
 8. Create `WeightedReturn` Product streams for each asset class.
 9. Create two 401k `Account` entities (one per member):
    - Each with: effective rate root (Additive), balance DollarStream
-     (EndOfYearGrowth), employee contribution DollarStream (Stored, $5000 YZV),
-     employer contribution DollarStream (Stored, $2500 YZV). Opening
+     (EndOfYearGrowth, start = CalendarYear(anchor_year)), employee
+     contribution DollarStream (Stored, $5000 YZV,
+     start = MemberAge(member_id, age: 22),
+     terminates = OnEvent(retirement_event_id)), employer contribution
+     DollarStream (Stored, $2500 YZV,
+     start = MemberAge(member_id, age: 22),
+     terminates = OnEvent(retirement_event_id)). Opening
      balance = $50,000 YZV.
 10. Create a joint `Bank` account with balance stream (EndOfYearGrowth, opening
     balance = $10,000 YZV). Bank's effective rate uses bonds allocation only.
