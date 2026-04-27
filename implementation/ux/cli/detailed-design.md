@@ -67,14 +67,14 @@ The CLI imports these types from `yarp-core`:
 - `StreamPoint` — `{ year, entries }`
 - `OwnedBy` — all variants
 - `StreamKind` — for `MemberLifecycleStream` detection
-- `StreamProcedure` — for `Additive` aggregate detection
+- `PointDenomination` — for `Idv` detection (inactive year rendering)
 - `Decimal` (re-exported from `rust_decimal`)
 
 **Error type:**
 - `ModelError` — `Display` impl produces formatted error strings per
   [error-handling.md](../../../design/error-handling.md)
 
-The CLI does **not** access engine internals (`eval`, `MemoTable`,
+The CLI does **not** access engine internals (`eval`,
 `resolved_start`, `resolved_end`, procedures), persistence internals
 (`PlanStore`, `JsonPlanStore`, `PlanStoreError`), or stream construction APIs.
 
@@ -325,11 +325,12 @@ No prefixes. The tree structure provides context.
 
 ### Inactive Year Handling
 
-The CLI determines inactive years from the absence of projection points,
-not from engine-internal resolved start/end values. If no `StreamPoint`
-exists for a year, the value is `None`. The engine guarantees that
-depleted-but-active streams still produce points (with zero value), while
-not-yet-active streams produce no points.
+The projection contains a point for every stream for every year in the
+timeline. The CLI distinguishes inactive years by checking the point's
+denomination: `Idv` means the stream is outside its active range.
+Points with `Idv` denomination render as `None` (empty cell in CSV,
+blank in table, `null` in JSON). Points with `Ynv` denomination render
+their value — including zero for depleted-but-active streams.
 
 ---
 

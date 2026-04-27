@@ -94,15 +94,19 @@ All output formats share the same orientation: **columns are years, rows are
 streams**. The first column is a row label; subsequent columns are one per
 projection year in ascending order.
 
-Row labels use names directly from the plan data: `Member.given_name` for
-member age rows, entity labels for leaf balance rows, and stream labels for
-aggregate rows. No prefixes — the tree structure provides context. Values
-containing commas are rejected at plan validation as `invalid-plan` errors —
-row labels must be safe for CSV output without quoting.
+Row labels use names directly from the plan data: streams with a label use
+it (aggregates: `"retirement"`, `"net-worth"`); streams without a label use
+the entity's display name via the owner (leaves: `"Alice 401k"`, `"Home"`;
+lifecycle: `"Alice"`). No prefixes — the tree structure provides context.
+Values containing commas are rejected at plan validation as `invalid-plan`
+errors — row labels must be safe for CSV output without quoting.
 
-Rows are emitted in **leaf-first tree order**: leaf streams appear before the
-aggregate that sums them. The reader sees detail rows first, then the summary
-row they feed into, mirroring the projection tree hierarchy bottom-up.
+Rows are emitted in **leaf-first tree order** by recursively walking the
+projection tree from the root. For each stream, the walk emits all children
+(via `inputs`) first, then emits the stream's own row. Children that are
+not in the projection (rates, contributions) are skipped — the lookup
+returns nothing and recursion stops naturally. Lifecycle rows are emitted
+before the tree walk.
 
 Rows emitted, in order:
 
@@ -130,8 +134,9 @@ Rows emitted, in order:
 RFC 4180 CSV written to stdout. First row is a header: `stream,<year>,<year>,...`.
 One data row per stream. No quoting unless a field contains a comma. Monetary
 values are bare numbers rounded to two decimal places — no currency symbols.
-Age values are integers. For years in which a stream is inactive or depleted,
-the cell is empty (no value between the surrounding commas).
+Age values are integers. Points with denomination `IDV` (identity values —
+the stream is outside its active range) render as empty cells (no value
+between the surrounding commas).
 
 ### Table Output (`--table`)
 
@@ -149,8 +154,8 @@ Layout rules:
 - No trailing whitespace on any line.
 - Monetary values are bare numbers rounded to two decimal places — no currency
   symbols. Age values are integers. Same formatting rules as CSV.
-- For years in which a stream is inactive or depleted, the cell is blank
-  (padded to column width with spaces).
+- Points with denomination `IDV` render as blank cells (padded to column
+  width with spaces).
 
 Example (illustrative widths only):
 
@@ -182,8 +187,8 @@ A single JSON object written to stdout:
 - `denomination` is always `"ynv"`. Each year's values are in that year's nominal dollars.
 - `years` lists the projection years in ascending order.
 - `rows` is an array of objects in the same row order as CSV. Each object has
-  a `stream` label and a `values` array parallel to `years`. For years in which
-  a stream is inactive or depleted, the corresponding entry in `values` is `null`.
+  a `stream` label and a `values` array parallel to `years`. Points with
+  denomination `IDV` render as `null` in the `values` array.
 - Monetary values are JSON numbers (not strings), rounded to two decimal places
   in output only; internal computation remains full-precision. No currency symbols.
 - Age values are JSON integers.
@@ -210,6 +215,9 @@ The generated plan contains:
   each with a starting balance.
 - One employee 401k contribution `DollarStream` per member (inputs key
   `"employee-401k"` on the account balance stream) with
+  `start = MemberAge(M.id, age: 22)` and `terminates = OnEvent(retirement_event_id)`.
+- One employer 401k contribution `DollarStream` per member (inputs key
+  `"employer-401k"` on the account balance stream) with
   `start = MemberAge(M.id, age: 22)` and `terminates = OnEvent(retirement_event_id)`.
 - One joint bank account with `label = "Bank"` and a starting balance.
 - One plan-level set of allocation weight `RateStream`s (label=`"weight.<class>"`)

@@ -178,25 +178,22 @@ on the `ValueSchema`.
 
 ### Identity Semantics
 
-Every stream emits a value for every year in the plan timeline. For years with
-no explicit `StreamPoint` — whether before the stream's start, after its derived
-end, or within gaps — the stream emits an **identity value**. The identity is
-determined by the attribute's `ValueUnit`:
+Every stream emits a value for every year in the plan timeline. For years
+outside the stream's active range — before start or after derived end — the
+stream emits `(0, IDV)`: zero with denomination `IDV`. This is the universal
+identity value for all unit types.
 
-| Unit | Identity | Rationale |
-|------|----------|-----------|
-| `Decimal` | `0` | Additive identity — contributes nothing to any sum |
-| `Rate` | carry-forward | Most recent `StreamPoint`; falls back to `AttributeDef.initial` |
-| `Count` | carry-forward | Enumeration values hold until a new point supersedes them; falls back to `AttributeDef.initial` |
-| `Years` | carry-forward | Same as `Rate` |
-| `Age` | carry-forward | Same as `Rate` |
+`IDV` is the marker that distinguishes "stream is not active" from "stream is
+active and computed zero." Consumers that need to differentiate these cases
+(e.g., the CLI rendering empty cells for inactive years) check for `IDV`.
 
-For carry-forward attributes, resolution proceeds as follows: take the most
-recent `StreamPoint` at or before the query year; if none exists, use
-`AttributeDef.initial`. The `initial` value is part of the stream definition —
-it is not tied to a year and applies implicitly from the stream's `start` onward.
-Carry-forward resolution never fails: the `initial` value is always the terminal
-fallback.
+Within the active range, carry-forward resolution applies to `Rate`, `Count`,
+`Years`, and `Age` units: take the most recent `StreamPoint` at or before the
+query year; if none exists, use `AttributeDef.initial`. The `initial` value is
+part of the stream definition — it is not tied to a year and applies implicitly
+from the stream's `start` onward. Carry-forward resolution never fails: the
+`initial` value is always the terminal fallback. `Decimal` unit streams with no
+stored point at or before the query year produce `0`.
 
 ### OwnedBy
 
@@ -244,13 +241,17 @@ PointDenomination =
     | YZV
     | PNV(ref_year: i32)
     | YNV(target_year: i32)   -- projection output points only
+    | IDV                     -- identity value; stream is outside its active range
 ```
 
 **Invariant:** `CNV` never appears on a stored `StreamPoint`.
 
 **Denomination on output points:** For projection output streams, each point's
-denomination is `YNV(point.year)`. The denomination of any stored point is
-determinable from the point record alone.
+denomination is `YNV(point.year)` when the stream is within its active range,
+or `IDV` when the stream is outside its active range (before start or after
+end). `IDV` marks identity values — the stream's neutral contribution to
+composition. The denomination of any stored point is determinable from the
+point record alone.
 
 ### Stream Procedures
 
@@ -1400,9 +1401,10 @@ p(2027) = $11,670 × 1.064 + $1,071.20 = $13,488.08   [YNV(2027)]
 
 2. `CNV` never appears on any stored `StreamPoint`. CNV is a display-layer denomination. CNV conversion is FUT; the MVP engine outputs YNV only.
 
-3. For all projection output `DollarStream` points, `denomination = YNV(point.year)`.
-   The denomination of any stored point is determinable from the point record
-   alone.
+3. For all projection output points where the stream is within its active
+   range, `denomination = YNV(point.year)`. For points where the stream is
+   outside its active range, `denomination = IDV`. The denomination of any
+   point is determinable from the point record alone.
 
 4. The sum of all `AllocationWeight` RateStream values active for a given year
    and account must equal 1.0. This is evaluated across all `WeightedReturn`

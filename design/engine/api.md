@@ -61,7 +61,7 @@ plan. All dollar-denominated points carry denomination `YNV(point.year)`.
 Projection {
     years:   Vec<i32>,                         -- projection year range, ascending
     root_id: StreamId,                         -- net-worth aggregate stream (tree walk entry point)
-    streams: Vec<Stream>,                      -- ephemeral projection streams
+    streams: Map<StreamId, Stream>,              -- ephemeral projection streams, keyed by stream id
     points:  Map<StreamId, Vec<StreamPoint>>,  -- points keyed by stream id
 }
 ```

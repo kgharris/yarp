@@ -94,6 +94,12 @@ only for the duration of `get_projection`.
 
 ## Phase 3 — Year Sweep
 
+The `Projection` is both the output and the computation workspace. `eval()`
+writes results directly into `Projection.points` as it goes. The sweep
+populates the projection year by year — each stream's row grows by one entry
+per year, and recurrence formulas read `p(y-1)` from the previous entry in
+the same row.
+
 The sweep is an **outer-year, inner-depth-first** double loop:
 
 ```
@@ -113,15 +119,13 @@ year; all other evaluation order is determined recursively by the `inputs` map.
 
 - `age = y - member.birth_year` (derived, not carried forward from stored points)
 
-The computed `age` is written to the memo table for year `y` so that downstream
-streams can read it via `eval`.
+The computed age is written directly to `Projection.points` for year `y` so
+that downstream streams can read it via `eval`.
 
-`eval(stream_id, y)` is **memoized**: each `(stream_id, year)` pair is computed
-at most once. When `eval` is called for a stream that has already been evaluated
-for year `y`, the cached value is returned immediately. The memo table persists
-across years — prior-year values must remain accessible for recurrence formulas
-(`memo[stream_id][y-1]`) and cumulative CPI products (`eval(cpi, t)` for
-`t < y`).
+`eval(stream_id, y)` is **cached**: each `(stream_id, year)` pair is computed
+at most once. When `eval` is called for a stream that has already been
+evaluated for year `y`, the value is read from `Projection.points` and
+returned immediately.
 
 ---
 
@@ -129,7 +133,7 @@ across years — prior-year values must remain accessible for recurrence formula
 
 ```
 eval(stream_id, y):
-    if memo[stream_id][y] exists → return it
+    if points[stream_id][y] exists → return it
 
     stream = streams[stream_id]          -- unified map built in Phase 2
 
@@ -140,7 +144,7 @@ eval(stream_id, y):
         input_vals = { name: eval(id, y) for (name, id) in stream.inputs }
         result     = dispatch(stream.procedure, stored, input_vals, stream_id, y)
 
-    memo[stream_id][y] = result
+    write result to points[stream_id] for year y
     return result
 ```
 
@@ -166,17 +170,15 @@ resolved_start(stream) ≤ y ≤ resolved_end(stream)
 - The end is derived from `terminates`, member death, entity lifecycle bounds,
   or `timeline_end` — in that priority order.
 
-For years outside the active range, `eval` returns the **identity value** for
-the stream's `ValueUnit` per
-[data-model.md § Identity Semantics](../data-model.md#identity-semantics):
-
-| Unit | Identity |
-|------|----------|
-| `Decimal` | `0` |
-| `Rate`, `Count`, `Years`, `Age` | carry-forward from most recent `StreamPoint`; falls back to `AttributeDef.initial` |
+For years outside the active range, `eval` returns `(0, IDV)` — zero with
+denomination `IDV` — per
+[data-model.md § Identity Semantics](../data-model.md#identity-semantics).
+This is the universal identity value for all unit types.
 
 Consumers of `eval` never branch on whether a stream is active — inactive
-streams produce identity values that contribute nothing to any aggregate.
+streams produce zero, which contributes nothing to any aggregate. Consumers
+that need to distinguish inactive years from active-zero years (e.g., display
+layers rendering empty cells) check for `IDV` on the output point.
 
 ---
 
@@ -240,12 +242,13 @@ Asset seeds (accounts, hard assets) are stored in `YZV` and converted to
 ```
 rate     = input_vals["rate"]
 net_flow = sum(convert(k, v, y) for k, v in input_vals if k != "rate")
-p(y)     = memo[stream_id][y-1] × (1 + rate) + net_flow
+p(y)     = p(y-1) × (1 + rate) + net_flow
 ```
 
-`p(y-1)` is available from the prior year's memo entry because the sweep
-proceeds year by year. All cash-flow inputs are in `input_vals` under
-user-defined keys; any key that is not `"rate"` is a cash-flow contribution.
+`p(y-1)` is the previous entry in this stream's points — the value written
+during the prior year's sweep iteration. All cash-flow inputs are in
+`input_vals` under user-defined keys; any key that is not `"rate"` is a
+cash-flow contribution.
 
 **Denomination-aware conversion for net-flow inputs.** Each cash-flow input
 is converted based on the denomination of its stored `StreamPoint`:
@@ -261,9 +264,7 @@ yzv_to_ynv(value_yzv, y, cpi_stream_id) =
 `cpi_stream_id` is the inflation stream id stored in the `EndOfYearGrowth`
 procedure variant (resolved during Phase 2 — see CPI stream resolution above).
 `eval(cpi_stream_id, t)` returns the carry-forward rate value for year `t`
-via the normal evaluation path. This keeps CPI resolution within the memo
-table and makes the inflation stream substitutable without changing the
-procedure.
+via the normal evaluation path.
 
 **Balance bound.** After the recurrence, the result is clamped toward zero
 based on the stream's owner type:
@@ -309,14 +310,16 @@ extra     = sum(convert(key, v, y) for key, v in input_vals
                 if key not in {"rate", "payment"})   -- denomination-aware per input
 
 if r_p = 0:
-    balance(y) = memo[stream_id][y-1] + pmt_p × k + extra
+    balance(y) = balance(y-1) + pmt_p × k + extra
 else:
-    balance(y) = memo[stream_id][y-1] × (1 + r_p)^k
+    balance(y) = balance(y-1) × (1 + r_p)^k
                  + pmt_p × ((1 + r_p)^k − 1) / r_p
                  + extra
 
 balance(y) = min(balance(y), 0.0)                        -- ceiling at zero
 ```
+
+`balance(y-1)` is the previous entry in this stream's points.
 
 The inner formula adds the payment term because `balance` is negative (liability
 convention) and `pmt_p` is positive (payment toward the debt). Adding a positive
@@ -340,14 +343,14 @@ Mid-life modifications are handled naturally by the recurrence:
 ### `InterestOnly`
 
 ```
-result = stored_point_value(stream, resolved_start(stream))   -- nominal opening balance
+result = stored_point_value(stream, y)                   -- nominal opening balance
 ```
 
 The principal does not change year over year. The stream emits the same
-nominal opening balance for every active year. No iteration or denomination
-conversion is needed — liability values are stored in nominal dollars (see
-[data-model.md § Liabilities](../data-model.md#liabilities)), so the emitted
-value is already in YNV(point.year) for each year.
+nominal opening balance for every active year via carry-forward. No iteration
+or denomination conversion is needed — liability values are stored in nominal
+dollars (see [data-model.md § Liabilities](../data-model.md#liabilities)),
+so the emitted value is already in YNV(point.year) for each year.
 
 Interest accrual is not emitted by this stream in MVP — it is a future concern
 when expense streams are introduced.
@@ -356,9 +359,11 @@ when expense streams are introduced.
 
 ## Sweep Output
 
-After the sweep, the engine collects all computed values from the memo table
-into `Projection.points`: a `Map<StreamId, Vec<StreamPoint>>` where each
-`StreamPoint` carries `denomination = YNV(point.year)`.
+The `Projection` is fully populated by the sweep — `eval()` writes each
+result directly into `Projection.points` as it is computed. There is no
+separate collection step. Each stream has a point for every year in the
+timeline. Active-range points carry `denomination = YNV(point.year)`;
+identity points carry `denomination = IDV`.
 
 `Projection.streams` contains all streams in the ephemeral projection tree.
 The CLI navigates by filtering on `stream.label` and `stream.owner` per
